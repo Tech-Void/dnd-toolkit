@@ -1,0 +1,20 @@
+{
+  "name": "dnd-toolkit",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build -w @dnd-toolkit/foundry",
+    "test": "vitest run",
+    "typecheck": "tsc -p packages/core && tsc -p packages/foundry",
+    "demo": "node packages/core/scripts/demo.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.4",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.3",
+    "vitest": "^5.0.3"
+  }
+}
