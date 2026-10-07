@@ -1,6 +1,14 @@
 import {
   crLabel,
   DIFFICULTIES,
+  formatPrice,
+  generateShop,
+  SETTLEMENTS,
+  SHOP_TYPES,
+  type Settlement,
+  type Shop,
+  type ShopType,
+  generateCave,
   generateDungeon,
   generateEncounter,
   generateHook,
@@ -11,6 +19,7 @@ import {
   TEMPLATES,
   type Difficulty,
   type DungeonMap,
+  type MapStyle,
   type Encounter,
   type EncounterTemplate,
   type HookTone,
@@ -20,7 +29,8 @@ import {
   type RoomKey,
 } from "@dnd-toolkit/core";
 import { drawDungeon } from "./render.ts";
-import { getCatalog, getMagicItems, type CatalogSource } from "./catalog.ts";
+import { getCatalog, getMagicItems, itemFamily, type CatalogSource } from "./catalog.ts";
+import { createMerchant, createShopJournal, getShopItems, itemPilesActive, shopHtml } from "./importers/shop.ts";
 import { createDungeonScene } from "./importers/scene.ts";
 import { createJournal, encounterHtml, hookHtml, lootHtml, postToChat } from "./importers/journal.ts";
 import { giveLootToActor } from "./importers/items.ts";
@@ -29,7 +39,7 @@ import { esc, MODULE_ID } from "./util.ts";
 
 const { ApplicationV2 } = foundry.applications.api;
 
-type Tab = "encounter" | "dungeon" | "loot" | "hook";
+type Tab = "encounter" | "dungeon" | "loot" | "shop" | "hook";
 
 interface FormState {
   encounter: {
@@ -42,8 +52,9 @@ interface FormState {
     source: CatalogSource;
     loot: boolean;
   };
-  dungeon: { seed: string; width: number; height: number; rooms: number; level: number; size: number; tags: string; place: boolean; name: string };
+  dungeon: { seed: string; style: MapStyle; width: number; height: number; rooms: number; level: number; size: number; tags: string; place: boolean; name: string };
   loot: { seed: string; cr: number; mode: LootMode };
+  shop: { seed: string; type: ShopType; settlement: Settlement };
   hook: { seed: string; level: number; tone: HookTone };
 }
 
@@ -82,13 +93,16 @@ export class ToolkitApp extends ApplicationV2 {
       reroll: ToolkitApp.#onReroll,
       addTag: ToolkitApp.#onAddTag,
       detectParty: ToolkitApp.#onDetectParty,
-      openMonster: ToolkitApp.#onOpenMonster,
+      openDoc: ToolkitApp.#onOpenDoc,
       encPlace: ToolkitApp.#onEncPlace,
       encCombat: ToolkitApp.#onEncCombat,
       encChat: ToolkitApp.#onEncChat,
       encJournal: ToolkitApp.#onEncJournal,
       toScene: ToolkitApp.#onToScene,
       lootChat: ToolkitApp.#onLootChat,
+      shopMerchant: ToolkitApp.#onShopMerchant,
+      shopJournal: ToolkitApp.#onShopJournal,
+      shopChat: ToolkitApp.#onShopChat,
       lootJournal: ToolkitApp.#onLootJournal,
       lootActor: ToolkitApp.#onLootActor,
       hookChat: ToolkitApp.#onHookChat,
@@ -101,6 +115,7 @@ export class ToolkitApp extends ApplicationV2 {
   encounter: Encounter | null = null;
   dungeon: { map: DungeonMap; keys: RoomKey[] } | null = null;
   loot: LootResult | null = null;
+  shop: Shop | null = null;
   hook: PlotHook | null = null;
   /** Tag suggestions for the datalist, loaded from the catalog on first use. */
   tagList: string[] | null = null;
@@ -112,8 +127,9 @@ export class ToolkitApp extends ApplicationV2 {
     const hasActorPacks = [...game.packs].some((p: any) => p.documentName === "Actor");
     this.form = {
       encounter: { seed: "", level: party.level, size: party.size, difficulty: "moderate", template: "auto", tags: "", source: hasActorPacks ? "compendium" : "srd", loot: true },
-      dungeon: { seed: "", width: 40, height: 30, rooms: 12, level: party.level, size: party.size, tags: "", place: true, name: "" },
+      dungeon: { seed: "", style: "dungeon", width: 40, height: 30, rooms: 12, level: party.level, size: party.size, tags: "", place: true, name: "" },
       loot: { seed: "", cr: party.level, mode: "hoard" },
+      shop: { seed: "", type: "general", settlement: "town" },
       hook: { seed: "", level: party.level, tone: "any" },
     };
   }
@@ -123,12 +139,13 @@ export class ToolkitApp extends ApplicationV2 {
   async _renderHTML() {
     const tabBtn = (id: Tab, label: string, icon: string) =>
       `<button type="button" class="${this.tab === id ? "active" : ""}" data-action="tab" data-tab="${id}"><i class="${icon}"></i> ${label}</button>`;
-    const body = { encounter: () => this.#encounterHtml(), dungeon: () => this.#dungeonHtml(), loot: () => this.#lootHtml(), hook: () => this.#hookHtml() }[this.tab]();
+    const body = { encounter: () => this.#encounterHtml(), dungeon: () => this.#dungeonHtml(), loot: () => this.#lootHtml(), shop: () => this.#shopHtml(), hook: () => this.#hookHtml() }[this.tab]();
     return `
       <nav class="dt-tabs">
         ${tabBtn("encounter", "Encounter", "fa-solid fa-dragon")}
         ${tabBtn("dungeon", "Dungeon", "fa-solid fa-dungeon")}
         ${tabBtn("loot", "Loot", "fa-solid fa-coins")}
+        ${tabBtn("shop", "Shop", "fa-solid fa-store")}
         ${tabBtn("hook", "Plot Hook", "fa-solid fa-scroll")}
       </nav>
       <section class="dt-body">${body}</section>`;
@@ -219,7 +236,7 @@ export class ToolkitApp extends ApplicationV2 {
       .map((g) => `<li class="dt-monster">
           ${g.monster.img ? `<img src="${esc(g.monster.img)}" alt="">` : `<i class="fa-solid fa-skull"></i>`}
           <span class="dt-count">${g.count}×</span>
-          ${g.monster.uuid ? `<a data-action="openMonster" data-uuid="${esc(g.monster.uuid)}">${esc(g.name)}</a>` : esc(g.name)}
+          ${g.monster.uuid ? `<a data-action="openDoc" data-uuid="${esc(g.monster.uuid)}">${esc(g.name)}</a>` : esc(g.name)}
           <span class="dt-sub">CR ${crLabel(g.monster.cr)}${g.role ? ` · ${g.role}` : ""} · ${(g.xpEach * g.count).toLocaleString()} XP</span>
         </li>`)
       .join("");
@@ -248,15 +265,18 @@ export class ToolkitApp extends ApplicationV2 {
       this.#field("dungeon", name, label, `<input type="number" min="${min}" max="${max}" value="${f[name]}">`);
     const d = this.dungeon;
     return `
-      <div class="dt-row">${num("width", "Width", 16, 120)}${num("height", "Height", 12, 120)}${num("rooms", "Max rooms", 2, 40)}</div>
+      <div class="dt-row">
+        ${this.#select("dungeon", "style", "Style", [["dungeon", "Rooms & corridors"], ["cave", "Cave"]], f.style)}
+        ${num("width", "Width", 16, 120)}${num("height", "Height", 12, 120)}${num("rooms", f.style === "cave" ? "Chambers" : "Max rooms", 2, 40)}
+      </div>
       <div class="dt-row">${this.#partyFields("dungeon")}</div>
       <div class="dt-row">${this.#tagsField("dungeon", "Monster theme")}</div>
       ${this.#seedRow("dungeon")}
       ${d ? `
         <div class="dt-preview-wrap"><canvas class="dt-preview"></canvas></div>
-        <p class="dt-meta">${d.map.rooms.length} rooms · ${d.map.walls.filter((w) => w.door).length} doors · ${d.keys.filter((k) => k.encounter).length} encounters · seed <code>${esc(d.map.seed)}</code></p>
+        <p class="dt-meta">${d.map.rooms.length} ${d.map.style === "cave" ? "chambers" : "rooms"} · ${d.map.walls.filter((w) => w.door).length} doors · ${d.keys.filter((k) => k.encounter).length} encounters · seed <code>${esc(d.map.seed)}</code></p>
         <div class="dt-row">
-          ${this.#field("dungeon", "name", "Scene name", `<input type="text" value="${esc(f.name)}" placeholder="Dungeon ${esc(d.map.seed)}">`)}
+          ${this.#field("dungeon", "name", "Scene name", `<input type="text" value="${esc(f.name)}" placeholder="${d.map.style === "cave" ? "Cave" : "Dungeon"} ${esc(d.map.seed)}">`)}
           <button type="button" data-action="toScene"><i class="fa-solid fa-map"></i> Create Scene</button>
         </div>
         <label class="dt-check"><input type="checkbox" data-group="dungeon" name="place" ${f.place ? "checked" : ""}> Place monster tokens (hidden) in their rooms</label>
@@ -282,6 +302,36 @@ export class ToolkitApp extends ApplicationV2 {
           <button type="button" data-action="lootActor"><i class="fa-solid fa-sack"></i> Give to selected token</button>
         </div>`
       : `<p class="dt-empty">Pick a CR and generate treasure.</p>`}`;
+  }
+
+  #shopHtml() {
+    const f = this.form.shop;
+    const s = this.shop;
+    const types = (Object.entries(SHOP_TYPES) as [ShopType, { label: string }][]).map(([v, d]): [string, string] => [v, d.label]);
+    const settlements = (Object.entries(SETTLEMENTS) as [Settlement, { label: string }][]).map(([v, d]): [string, string] => [v, d.label]);
+    const piles = itemPilesActive();
+    return `
+      <div class="dt-row">
+        ${this.#select("shop", "type", "Shop", types, f.type)}
+        ${this.#select("shop", "settlement", "Settlement", settlements, f.settlement)}
+        ${this.#select("encounter", "source", "Items from", [["compendium", "My compendiums"], ["srd", "Built-in SRD"]], this.form.encounter.source)}
+      </div>
+      ${this.#seedRow("shop")}
+      ${s ? `
+        <div class="dt-card dt-shop">
+          <p class="dt-enc-head"><strong>${esc(s.name)}</strong> · ${esc(SHOP_TYPES[s.type].label.toLowerCase())} · ×${s.priceModifier} prices · haggle DC ${s.haggleDc}</p>
+          <p>${esc(s.keeper.name)} (${esc(s.keeper.race)}), ${esc(s.keeper.personality)}; ${esc(s.keeper.quirk)}.</p>
+          <table class="dt-stock">${s.stock.map((e) => `<tr class="${e.item.rarity ? "dt-magic" : ""}">
+            <td>${e.item.uuid ? `<a data-action="openDoc" data-uuid="${esc(e.item.uuid)}">${esc(e.item.name)}</a>` : esc(e.item.name)}${e.item.rarity ? ` <em>${e.item.rarity}</em>` : ""}</td>
+            <td class="dt-qty">${e.quantity}</td><td class="dt-price">${formatPrice(e.priceGp)}</td></tr>`).join("")}</table>
+          <p><strong>Rumor:</strong> ${esc(s.rumor)}</p>
+        </div>
+        <div class="dt-row dt-actions">
+          <button type="button" data-action="shopMerchant" ${piles ? "" : "disabled"} title="${piles ? "Create an Item Piles merchant players can buy from" : "Requires the Item Piles module"}"><i class="fa-solid fa-shop"></i> Item Piles merchant</button>
+          <button type="button" data-action="shopJournal"><i class="fa-solid fa-book"></i> Journal</button>
+          <button type="button" data-action="shopChat"><i class="fa-solid fa-comment"></i> Chat</button>
+        </div>`
+      : `<p class="dt-empty">Pick a shop and settlement size, then generate.</p>`}`;
   }
 
   #hookHtml() {
@@ -329,8 +379,14 @@ export class ToolkitApp extends ApplicationV2 {
         const f = this.form.dungeon;
         const source = this.form.encounter.source;
         const [catalog, magicItems] = await Promise.all([getCatalog(source), getMagicItems(source)]);
-        const map = generateDungeon({ seed, width: f.width, height: f.height, maxRooms: f.rooms });
+        const map = f.style === "cave"
+          ? generateCave({ seed, width: f.width, height: f.height, chambers: f.rooms })
+          : generateDungeon({ seed, width: f.width, height: f.height, maxRooms: f.rooms });
         this.dungeon = { map, keys: stockDungeon(map, { partyLevel: f.level, partySize: f.size, tags: f.tags, catalog, magicItems }) };
+      } else if (group === "shop") {
+        const f = this.form.shop;
+        const items = this.form.encounter.source === "srd" ? undefined : await getShopItems(itemFamily);
+        this.shop = generateShop({ seed, type: f.type, settlement: f.settlement, items });
       } else if (group === "loot") {
         const magicItems = await getMagicItems(this.form.encounter.source);
         this.loot = generateLoot({ seed, cr: this.form.loot.cr, mode: this.form.loot.mode, magicItems });
@@ -391,7 +447,7 @@ export class ToolkitApp extends ApplicationV2 {
     this.render();
   }
 
-  static async #onOpenMonster(this: ToolkitApp, _e: Event, target: HTMLElement) {
+  static async #onOpenDoc(this: ToolkitApp, _e: Event, target: HTMLElement) {
     const doc = await fromUuid(target.dataset.uuid!);
     doc?.sheet?.render(true);
   }
@@ -440,6 +496,19 @@ export class ToolkitApp extends ApplicationV2 {
     const actor = canvas.tokens?.controlled[0]?.actor ?? game.user.character;
     if (!actor) return ui.notifications.warn("Select a token (or assign yourself a character) first.");
     await giveLootToActor(this.loot, actor);
+  }
+
+  static #onShopMerchant(this: ToolkitApp, _e: Event, target: HTMLButtonElement) {
+    const s = this.shop;
+    if (s) this.#run(target, () => createMerchant(s));
+  }
+
+  static #onShopJournal(this: ToolkitApp) {
+    if (this.shop) createShopJournal(this.shop);
+  }
+
+  static #onShopChat(this: ToolkitApp) {
+    if (this.shop) postToChat(`<h3>${esc(this.shop.name)}</h3>${shopHtml(this.shop)}`);
   }
 
   static #onHookChat(this: ToolkitApp) {

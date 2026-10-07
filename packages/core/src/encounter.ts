@@ -257,6 +257,12 @@ function weightedShuffle(rng: Rng, picks: Pick[]): Pick[] {
 }
 type Draft = Map<MonsterEntry, number>;
 
+const BESTIAL = new Set(["beast", "ooze", "plant", "construct"]);
+const ALPHA_TACTICS: [string, string] = [
+  "is the pack's alpha, attacking first and hardest; if it falls, the rest scatter",
+  "lead the pack, attacking first and hardest; if they fall, the rest scatter",
+];
+
 /** [singular, plural] tactics per role. */
 const ROLE_TACTICS: Record<Role, [string, string]> = {
   leader: ["barks orders from the back; drop it and the rest check morale (DC 10 Wis or flee)", "bark orders from the back; drop them and the rest check morale"],
@@ -471,7 +477,8 @@ export function generateEncounter(opts: EncounterOptions): Encounter {
 
   const tactics = groups.map((g) => {
     const role = g.role ?? "brute";
-    const [one, many] = ROLE_TACTICS[role];
+    // Animals and mindless things lead by instinct, not orders.
+    const [one, many] = role === "leader" && BESTIAL.has(g.monster.type) ? ALPHA_TACTICS : ROLE_TACTICS[role];
     return g.count > 1 ? `${g.count}× ${g.name} ${many}.` : `The ${g.name} ${one}.`;
   });
 

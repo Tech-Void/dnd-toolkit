@@ -1,5 +1,5 @@
 // Quick look at the generators without Foundry: `npm run demo [seed] [tags]`
-import { crLabel, encounterSummary, generateDungeon, generateEncounter, generateHook, generateLoot, renderAscii, stockDungeon } from "../src/index.ts";
+import { crLabel, encounterSummary, formatPrice, generateCave, generateDungeon, generateEncounter, generateHook, generateLoot, generateShop, renderAscii, stockDungeon } from "../src/index.ts";
 
 const seed = process.argv[2] ?? "demo";
 const tags = process.argv[3] ?? "";
@@ -23,6 +23,13 @@ for (const difficulty of ["low", "moderate", "high", "deadly"] as const) {
   console.log(`    Situation: ${e.situation}\n    Terrain: ${e.terrain}`);
   for (const w of e.warnings) console.log(`    ⚠ ${w}`);
 }
+
+console.log(`\nCave (seed "${seed}"):`);
+console.log(renderAscii(generateCave({ seed })));
+
+const shop = generateShop({ type: "blacksmith", settlement: "town", seed });
+console.log(`\n${shop.name} — ${shop.keeper.name} (${shop.keeper.race}), ${shop.keeper.personality}`);
+for (const e of shop.stock) console.log(`  ${String(e.quantity).padStart(3)}× ${e.item.name.padEnd(28)} ${formatPrice(e.priceGp)}`);
 
 console.log("\nHoard (CR 7):");
 console.dir(generateLoot({ cr: 7, mode: "hoard", seed }), { depth: 3 });

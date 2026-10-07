@@ -33,7 +33,8 @@ npm run dev -w @dnd-toolkit/foundry   # rebuild on save
 Enable **DnD Toolkit** in your world, then click the d20 button in the Token controls (GM only).
 
 - **Encounter**: party level and size (or auto-detect from player characters), difficulty, shape, and **monster tags**. Click a monster's name for its statblock. *Place hidden* drops non-overlapping tokens around your view. *Place & fight* adds them to combat and rolls initiative.
-- **Dungeon**: preview, then *Create Scene*. The scene gets a background image, walls, doors, token vision and fog, plus a room-key journal pinned as map notes. Set a **monster theme** (e.g. `goblinoid`) and every room's encounter fits it. A lair gets a high-difficulty fight and a hoard. Monsters can be placed as hidden tokens in their rooms.
+- **Dungeon**: choose *Rooms & corridors* or *Cave*. Caves are cellular-automata caverns joined by tunnels and split into natural chambers, numbered in exploration order from the entrance. Preview, then *Create Scene*. The scene gets a background image, walls, doors, token vision and fog, plus a room-key journal pinned as map notes. Set a **monster theme** (e.g. `goblinoid`) and every room's encounter fits it. A lair gets a high-difficulty fight and a hoard. Monsters can be placed as hidden tokens in their rooms.
+- **Shop**: general store, blacksmith, armorer, weaponsmith, bowyer/fletcher, alchemist, jeweler, or magic shop, in a hamlet up to a metropolis. Settlement size sets stock depth and the highest magic rarity, and general stores never go past uncommon. Every shop comes with a name, a shopkeeper (race, personality, quirk), a price markup, a buy-back rate, a haggle DC and a rumor. Stock comes from your item compendiums, deduped across DDB and SRD spellings, with firearms and mounts excluded. You can send it to a journal or chat, or create an **Item Piles merchant** players can buy from. The markup becomes the merchant's buy price modifier.
 - **Loot**: individual or hoard treasure by CR. Post it to chat, save it to a journal, or *Give to selected token*. That adds coins to dnd5e currency and items to the inventory, pulled from your compendiums by name when a match exists.
 - **Plot Hook**: tone and level-scaled hooks with a GM-only twist.
 
@@ -72,9 +73,11 @@ Tags come from creature type, subtype, environment, curated themes (`bandit`, `c
 
 - [x] Encounters: XP budgets, tag search, race reskins, token placement, combat start
 - [ ] Encounter tweaks: lock a group and reroll the rest; "add a wave"
-- [ ] More map styles: caves (cellular automata), towns, wilderness hex; lights and ambient sound
+- [x] Cave maps
+- [x] Shops and merchant inventories (with Item Piles integration)
+- [ ] More map styles: towns, wilderness hex; smoother cave walls; lights and ambient sound
+- [ ] Stable / shipwright shop for mounts and vehicles
 - [ ] NPC generator: name, look, voice, motive, plus a dnd5e NPC actor from a statblock template
-- [ ] Shops and merchant inventories (with Item Piles integration)
 - [ ] Rollable Table export for each generator
 - [ ] Character sync: import from a JSON character format (see licensing note below)
 - [ ] Settings for content packs: user-supplied JSON tables merged into the generators

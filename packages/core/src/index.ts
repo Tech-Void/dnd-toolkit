@@ -5,3 +5,5 @@ export * from "./hooks.ts";
 export type { Rarity } from "./data/treasure.ts";
 export * from "./encounter.ts";
 export * from "./roles.ts";
+export * from "./shops.ts";
+export * from "./cave.ts";

@@ -94,3 +94,11 @@
 .dnd-toolkit .dt-high { color: #d2691e; }
 .dnd-toolkit .dt-deadly { color: #b22222; }
 .dnd-toolkit .dt-warn { color: #b8860b; font-style: italic; }
+
+.dnd-toolkit .dt-stock { width: 100%; border-collapse: collapse; font-size: var(--font-size-12, 12px); margin: 0.3rem 0; }
+.dnd-toolkit .dt-stock td { padding: 0.1rem 0.3rem; border-bottom: 1px solid rgba(0, 0, 0, 0.08); }
+.dnd-toolkit .dt-stock a { cursor: pointer; }
+.dnd-toolkit .dt-stock .dt-qty { text-align: right; width: 3rem; }
+.dnd-toolkit .dt-stock .dt-price { text-align: right; width: 7rem; white-space: nowrap; }
+.dnd-toolkit .dt-stock .dt-magic td:first-child { font-weight: bold; }
+.dnd-toolkit .dt-stock em { font-weight: normal; opacity: 0.7; }

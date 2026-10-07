@@ -4,6 +4,7 @@ import { getCatalog, getMagicItems, reanalyzeMonsters, resetCatalog } from "./ca
 import { createDungeonScene } from "./importers/scene.ts";
 import { createJournal, createRoomKeyJournal, encounterHtml, hookHtml, lootHtml, postToChat } from "./importers/journal.ts";
 import { ensureWorldActor, linkEncounter, placeEncounter } from "./importers/tokens.ts";
+import { createMerchant, createShopJournal, getShopItems, resetShopItems, shopHtml } from "./importers/shop.ts";
 import { giveLootToActor, resetItemIndex, resolveItemData } from "./importers/items.ts";
 import { MODULE_ID } from "./util.ts";
 
@@ -31,6 +32,10 @@ const api = {
   linkEncounter,
   ensureWorldActor,
   encounterHtml,
+  createMerchant,
+  createShopJournal,
+  getShopItems,
+  shopHtml,
   createDungeonScene,
   createRoomKeyJournal,
   createJournal,
@@ -58,7 +63,12 @@ Hooks.once("init", () => {
 });
 
 // New or deleted NPCs/compendium content changes what encounters can use.
-for (const hook of ["createActor", "deleteActor", "createItem", "deleteItem", "updateCompendium"]) Hooks.on(hook, () => resetCatalog());
+for (const hook of ["createActor", "deleteActor", "createItem", "deleteItem", "updateCompendium"]) {
+  Hooks.on(hook, () => {
+    resetCatalog();
+    resetShopItems();
+  });
+}
 
 Hooks.once("ready", () => {
   Hooks.callAll(`${MODULE_ID}.ready`, api);

@@ -18,13 +18,31 @@ export interface DungeonOptions {
   seed?: string | number;
 }
 
+/** A room or cave chamber. x/y/w/h is the bounding box; irregular chambers also list their cells. */
 export interface Room {
   id: number;
   x: number;
   y: number;
   w: number;
   h: number;
+  /** Floor cells [x, y] of an irregular chamber. Absent = every cell in the box. */
+  cells?: [number, number][];
+  /** Where the room's label and map note go. Absent = box center. */
+  center?: [number, number];
 }
+
+export const roomCenter = (r: Room): [number, number] => r.center ?? [Math.floor(r.x + r.w / 2), Math.floor(r.y + r.h / 2)];
+
+export function roomCells(r: Room): [number, number][] {
+  if (r.cells) return r.cells;
+  const out: [number, number][] = [];
+  for (let y = r.y; y < r.y + r.h; y++) for (let x = r.x; x < r.x + r.w; x++) out.push([x, y]);
+  return out;
+}
+
+export const roomArea = (r: Room) => r.cells?.length ?? r.w * r.h;
+
+export type MapStyle = "dungeon" | "cave";
 
 /** A wall along cell edges, in grid units (multiply by grid size for pixels). */
 export interface WallSegment {
@@ -37,6 +55,7 @@ export interface WallSegment {
 
 export interface DungeonMap {
   seed: string;
+  style: MapStyle;
   width: number;
   height: number;
   /** cells[y][x]: ROCK or FLOOR. */
@@ -45,7 +64,7 @@ export interface DungeonMap {
   walls: WallSegment[];
 }
 
-const center = (r: Room): [number, number] => [Math.floor(r.x + r.w / 2), Math.floor(r.y + r.h / 2)];
+const center = roomCenter;
 const dist = (a: Room, b: Room) => {
   const [ax, ay] = center(a);
   const [bx, by] = center(b);
@@ -144,7 +163,7 @@ function findDoors(rng: Rng, cells: number[][], rooms: Room[], doorChance: numbe
 }
 
 /** Merge unit edges into long segments and add door segments. */
-function buildWalls(cells: number[][], width: number, height: number, doors: Set<string>): WallSegment[] {
+export function buildWalls(cells: number[][], width: number, height: number, doors: Set<string>): WallSegment[] {
   const isFloor = (x: number, y: number) => cells[y]?.[x] === FLOOR;
   const hEdges = new Map<number, number[]>(); // y -> xs
   const vEdges = new Map<number, number[]>(); // x -> ys
@@ -213,7 +232,7 @@ export function generateDungeon(opts: DungeonOptions = {}): DungeonMap {
 
   const doors = findDoors(rng, cells, rooms, o.doorChance);
   const walls = buildWalls(cells, o.width, o.height, doors);
-  return { seed: rng.seed, width: o.width, height: o.height, cells, rooms, walls };
+  return { seed: rng.seed, style: "dungeon", width: o.width, height: o.height, cells, rooms, walls };
 }
 
 // ---------------------------------------------------------------------------
@@ -246,6 +265,23 @@ const ROOM_FEATURES = [
   "Crude tally marks cover every reachable surface.",
 ];
 
+const CAVE_FEATURES = [
+  "Stalactites drip steadily into a shallow, ice-cold pool.",
+  "Pale fungus carpets the floor and glows when stepped on.",
+  "A narrow fissure in the ceiling lets in a thin shaft of daylight.",
+  "Old campfire ash and gnawed bones mark a recent camp.",
+  "An underground stream cuts across the chamber, knee-deep and fast.",
+  "Bats roost thickly overhead; loud noises send them swirling.",
+  "Crystal veins in the walls catch and scatter any light.",
+  "The floor slopes sharply; loose scree makes footing treacherous.",
+  "Crude pictographs of hunters and a great serpent cover one wall.",
+  "A sulfurous vent hisses warm, foul-smelling air.",
+  "Webs choke the upper reaches of the chamber.",
+  "Collapsed rock has half-buried an old mining cart.",
+  "Mud pools bubble lazily; the air is thick and warm.",
+  "Thick roots push through the ceiling from the forest above.",
+];
+
 const TRAPS = [
   "Pressure plate: poison darts (DC 13 Dex save, 2d10 poison)",
   "Tripwire: collapsing ceiling (DC 15 Dex save, 4d10 bludgeoning)",
@@ -269,19 +305,20 @@ export function stockDungeon(map: DungeonMap, opts: StockOptions): RoomKey[] {
   const rng = createRng(opts.seed ?? `${map.seed}:stock`);
   const base = { partyLevel: opts.partyLevel, partySize: opts.partySize ?? 4, tags: opts.tags, catalog: opts.catalog, magicItems: opts.magicItems };
   // The lair is the largest room that isn't the entrance.
-  const bossRoom = map.rooms.slice(1).reduce<Room | undefined>((big, r) => (!big || r.w * r.h > big.w * big.h ? r : big), undefined);
+  const bossRoom = map.rooms.slice(1).reduce<Room | undefined>((big, r) => (!big || roomArea(r) > roomArea(big) ? r : big), undefined);
   // Don't pack more creatures into a room than it can comfortably hold.
-  const capFor = (r: Room) => Math.max(1, Math.min(base.partySize * 2, Math.floor((r.w * r.h) / 3)));
+  const capFor = (r: Room) => Math.max(1, Math.min(base.partySize * 2, Math.floor(roomArea(r) / 3)));
 
   return map.rooms.map((room) => {
-    const key: RoomKey = { roomId: room.id, title: `Room ${room.id}`, description: rng.pick(ROOM_FEATURES) };
+    const noun = map.style === "cave" ? "Chamber" : "Room";
+    const key: RoomKey = { roomId: room.id, title: `${noun} ${room.id}`, description: rng.pick(map.style === "cave" ? CAVE_FEATURES : ROOM_FEATURES) };
     const seed = `${rng.seed}:${room.id}`;
     if (room.id === 1) {
-      key.title = "Room 1 — Entrance";
+      key.title = `${noun} 1 — Entrance`;
       return key;
     }
     if (room === bossRoom) {
-      key.title = `Room ${room.id} — Lair`;
+      key.title = `${noun} ${room.id} — Lair`;
       key.encounter = generateEncounter({ ...base, difficulty: "high", template: rng.pick(["leader", "solo", "elite"] as const), maxCreatures: capFor(room), seed });
       key.loot = generateLoot({ cr: Math.max(...key.encounter.groups.map((g) => g.monster.cr), opts.partyLevel), mode: "hoard", magicItems: opts.magicItems, seed });
       return key;
@@ -301,7 +338,7 @@ export function renderAscii(map: DungeonMap): string {
   for (const r of map.rooms) {
     const label = String(r.id);
     const [cx, cy] = center(r);
-    for (let i = 0; i < label.length && inRoom(r, cx + i, cy); i++) rows[cy]![cx + i] = label[i]!;
+    for (let i = 0; i < label.length && map.cells[cy]?.[cx + i] === FLOOR; i++) rows[cy]![cx + i] = label[i]!;
   }
   return rows.map((r) => r.join("")).join("\n");
 }

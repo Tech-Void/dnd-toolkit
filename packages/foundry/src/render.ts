@@ -1,4 +1,4 @@
-import { FLOOR, type DungeonMap } from "@dnd-toolkit/core";
+import { FLOOR, roomCenter, type DungeonMap } from "@dnd-toolkit/core";
 
 export interface RenderOptions {
   /** Pixels per grid cell. */
@@ -7,17 +7,14 @@ export interface RenderOptions {
   labels?: boolean;
 }
 
-const COLORS = {
-  rock: "#2a2520",
-  floor: "#d8ccb1",
-  grid: "rgba(60, 45, 30, 0.18)",
-  wall: "#1a1612",
-  door: "#8a5a2b",
-  label: "rgba(120, 30, 20, 0.85)",
+const PALETTES = {
+  dungeon: { rock: "#2a2520", floor: "#d8ccb1", grid: "rgba(60, 45, 30, 0.18)", wall: "#1a1612", door: "#8a5a2b", label: "rgba(120, 30, 20, 0.85)" },
+  cave: { rock: "#1c1915", floor: "#9a8c76", grid: "rgba(30, 24, 18, 0.15)", wall: "#0d0b09", door: "#8a5a2b", label: "rgba(150, 30, 20, 0.9)" },
 };
 
 export function drawDungeon(canvas: HTMLCanvasElement, map: DungeonMap, o: RenderOptions): void {
   const { cell } = o;
+  const COLORS = PALETTES[map.style ?? "dungeon"];
   canvas.width = map.width * cell;
   canvas.height = map.height * cell;
   const ctx = canvas.getContext("2d")!;
@@ -74,7 +71,10 @@ export function drawDungeon(canvas: HTMLCanvasElement, map: DungeonMap, o: Rende
     ctx.font = `bold ${Math.round(cell * 1.1)}px serif`;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    for (const r of map.rooms) ctx.fillText(String(r.id), (r.x + r.w / 2) * cell, (r.y + r.h / 2) * cell);
+    for (const r of map.rooms) {
+      const [cx, cy] = roomCenter(r);
+      ctx.fillText(String(r.id), (cx + 0.5) * cell, (cy + 0.5) * cell);
+    }
   }
 }
 

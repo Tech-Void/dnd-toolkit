@@ -1,4 +1,4 @@
-import { createRng, type DungeonMap, type RoomKey } from "@dnd-toolkit/core";
+import { createRng, roomCells, roomCenter, type DungeonMap, type RoomKey } from "@dnd-toolkit/core";
 import { dungeonToBlob } from "../render.ts";
 import { ensureFolder, MODULE_ID } from "../util.ts";
 import { createRoomKeyJournal } from "./journal.ts";
@@ -34,7 +34,7 @@ export interface SceneImportOptions {
 /** Create a fully playable Scene: background image, walls, doors, vision, and room notes. */
 export async function createDungeonScene(map: DungeonMap, opts: SceneImportOptions = {}) {
   const gs = opts.gridSize ?? game.settings.get(MODULE_ID, "gridSize") ?? 100;
-  const name = opts.name ?? `Dungeon ${map.seed}`;
+  const name = opts.name ?? `${map.style === "cave" ? "Cave" : "Dungeon"} ${map.seed}`;
 
   const blob = await dungeonToBlob(map, { cell: gs });
   const src = await uploadImage(blob, `dungeon-${map.seed.replace(/[^\w-]/g, "_")}-${Date.now()}.webp`);
@@ -56,8 +56,8 @@ export async function createDungeonScene(map: DungeonMap, opts: SceneImportOptio
       notes.push({
         entryId: journal.id,
         pageId: page.id,
-        x: Math.round((room.x + room.w / 2) * gs),
-        y: Math.round((room.y + room.h / 2) * gs),
+        x: Math.round((roomCenter(room)[0] + 0.5) * gs),
+        y: Math.round((roomCenter(room)[1] + 0.5) * gs),
         text: String(room.id),
         texture: { src: "icons/svg/book.svg" },
         iconSize: Math.round(gs * 0.5),
@@ -88,10 +88,8 @@ export async function createDungeonScene(map: DungeonMap, opts: SceneImportOptio
       const room = map.rooms.find((r) => r.id === key.roomId);
       if (!room || !key.encounter) continue;
       // Shuffled interior cells, skipping the room's center where the map note sits.
-      const cells: [number, number][] = [];
-      for (let y = room.y; y < room.y + room.h; y++) for (let x = room.x; x < room.x + room.w; x++) cells.push([x, y]);
-      const cx = Math.floor(room.x + room.w / 2);
-      const cy = Math.floor(room.y + room.h / 2);
+      const cells = roomCells(room);
+      const [cx, cy] = roomCenter(room);
       const shuffled = createRng(`${map.seed}:tokens:${room.id}`).shuffle(cells.filter(([x, y]) => x !== cx || y !== cy));
       await placeEncounter(key.encounter, { scene, cells: shuffled, hidden: true });
     }
