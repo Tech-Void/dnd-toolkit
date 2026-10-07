@@ -1,5 +1,7 @@
 import * as core from "@dnd-toolkit/core";
-import { detectParty, ToolkitApp } from "./app.ts";
+import { detectParty, ToolkitApp, type Tab } from "./app.ts";
+import { createBattlemapScene } from "./importers/battlemap.ts";
+import { createNpcActor, npcHtml, placeNpcToken } from "./importers/npc.ts";
 import { getCatalog, getMagicItems, reanalyzeMonsters, resetCatalog } from "./catalog.ts";
 import { createDungeonScene } from "./importers/scene.ts";
 import { createJournal, createRoomKeyJournal, encounterHtml, hookHtml, lootHtml, postToChat } from "./importers/journal.ts";
@@ -25,7 +27,7 @@ import { MODULE_ID } from "./util.ts";
  */
 const api = {
   ...core,
-  open: (tab?: "encounter" | "dungeon" | "loot" | "hook") => ToolkitApp.open(tab),
+  open: (tab?: Tab) => ToolkitApp.open(tab),
   getCatalog,
   getMagicItems,
   resetCatalog,
@@ -41,6 +43,12 @@ const api = {
   getShopItems,
   shopHtml,
   createDungeonScene,
+  /** await tk.createBattlemapScene(tk.generateBattlemap({ setting: "tavern", night: true }), { encounter }) */
+  createBattlemapScene,
+  /** const actor = await tk.createNpcActor(tk.generateNpc({ role: "guard" })); await tk.placeNpcToken(actor); */
+  createNpcActor,
+  placeNpcToken,
+  npcHtml,
   createRoomKeyJournal,
   createJournal,
   postToChat,

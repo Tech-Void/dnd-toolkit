@@ -34,7 +34,9 @@ Enable **DnD Toolkit** in your world, then click the d20 button in the Token con
 
 - **Encounter**: party level and size (or auto-detect from player characters), difficulty, shape, and **monster tags**. Click a monster's name for its statblock. *Place hidden* drops non-overlapping tokens around your view. *Place & fight* adds them to combat and rolls initiative. Click the lock next to a group to keep it, then *Generate* again to rebuild everything else around it (same seed, same result; the dice button rerolls). *Add a wave* stacks on reinforcements worth about half the budget, each arriving on a later round with *Bring in* to drop them into the running combat.
 - **Dungeon**: choose *Rooms & corridors* or *Cave*. Caves are cellular-automata caverns joined by tunnels and split into natural chambers, numbered in exploration order from the entrance. Preview, then *Create Scene*. The scene gets a background image, walls, doors, token vision and fog, plus a room-key journal pinned as map notes. Set a **monster theme** (e.g. `goblinoid`) and every room's encounter fits it. A lair gets a high-difficulty fight and a hoard. Monsters can be placed as hidden tokens in their rooms.
+- **Battlemap**: a quick one-fight map. Pick forest clearing, road ambush, cave grotto, shop, tavern, ruins or bandit camp (or random), a size, and day or night. *Create Scene* builds a painted scene with walls, doors and windows. Trees, boulders, pillars, shelves and tents block movement and sight. It also gets fire, lamp and glowing-mushroom lights, darkness for caves and night, and a battlefield-notes journal covering cover, difficult terrain and hazards. The preview marks where the party arrives (blue) and where enemies start (red). Tick the box to drop the current encounter there as hidden tokens. The Shop tab's *Battlemap* button builds that shop's floor.
 - **Shop**: general store, blacksmith, armorer, weaponsmith, bowyer/fletcher, alchemist, jeweler, or magic shop, in a hamlet up to a metropolis. Settlement size sets stock depth and the highest magic rarity, and general stores never go past uncommon. Every shop comes with a name, a shopkeeper (race, personality, quirk), a price markup, a buy-back rate, a haggle DC and a rumor. Stock comes from your item compendiums, deduped across DDB and SRD spellings, with firearms and mounts excluded. You can send it to a journal or chat, or create an **Item Piles merchant** players can buy from. The markup becomes the merchant's buy price modifier.
+- **NPC**: pick a role (commoner, merchant, innkeeper, guard, soldier, noble, priest, scholar, criminal, mage) and race, or leave them random. You get a name, age, occupation, look, voice, personality, what they want, a quirk, an opening line, and a GM-only secret. *Create actor* copies a fitting statblock from your compendiums (Guard, Veteran, Noble, Spy...) under the NPC's name, with the personality in its biography and the race set. *Place token* drops it at the center of your view. The Shop tab's *Keeper NPC* button fleshes out the shopkeeper the same way.
 - **Loot**: individual or hoard treasure by CR. Post it to chat, save it to a journal, or *Give to selected token*. That adds coins to dnd5e currency and items to the inventory, pulled from your compendiums by name when a match exists.
 - **Plot Hook**: tone and level-scaled hooks with a GM-only twist.
 
@@ -74,10 +76,11 @@ Tags come from creature type, subtype, environment, curated themes (`bandit`, `c
 - [x] Encounters: XP budgets, tag search, race reskins, token placement, combat start
 - [x] Encounter tweaks: lock a group and reroll the rest; "add a wave"
 - [x] Cave maps
+- [x] Quick battlemaps: clearing, road, cave, shop, tavern, ruins, camp, with lights, darkness and enemy start zones
 - [x] Shops and merchant inventories (with Item Piles integration)
 - [ ] More map styles: towns, wilderness hex; smoother cave walls; lights and ambient sound
 - [ ] Stable / shipwright shop for mounts and vehicles
-- [ ] NPC generator: name, look, voice, motive, plus a dnd5e NPC actor from a statblock template
+- [x] NPC generator: name, look, voice, motive, plus a dnd5e NPC actor from a statblock template
 - [ ] Rollable Table export for each generator
 - [ ] Character sync: import from a JSON character format (see licensing note below)
 - [ ] Settings for content packs: user-supplied JSON tables merged into the generators

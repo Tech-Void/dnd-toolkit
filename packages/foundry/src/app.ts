@@ -1,5 +1,17 @@
 import {
   addWave,
+  BATTLEMAP_SETTINGS,
+  encounterSummary,
+  generateBattlemap,
+  generateNpc,
+  NPC_RACES,
+  NPC_ROLES,
+  npcTraits,
+  type Npc,
+  type NpcRole,
+  type Battlemap,
+  type BattlemapSetting,
+  type BattlemapSize,
   crLabel,
   DIFFICULTIES,
   encounterXp,
@@ -33,6 +45,9 @@ import {
   type RoomKey,
 } from "@dnd-toolkit/core";
 import { drawDungeon } from "./render.ts";
+import { drawBattlemap } from "./render-battlemap.ts";
+import { createBattlemapScene } from "./importers/battlemap.ts";
+import { createNpcActor, npcHtml, placeNpcToken } from "./importers/npc.ts";
 import { getCatalog, getMagicItems, itemFamily, type CatalogSource } from "./catalog.ts";
 import { createMerchant, createShopJournal, getShopItems, itemPilesActive, shopHtml } from "./importers/shop.ts";
 import { createDungeonScene } from "./importers/scene.ts";
@@ -43,7 +58,7 @@ import { esc, MODULE_ID } from "./util.ts";
 
 const { ApplicationV2 } = foundry.applications.api;
 
-type Tab = "encounter" | "dungeon" | "loot" | "shop" | "hook";
+export type Tab = "encounter" | "dungeon" | "battlemap" | "loot" | "shop" | "npc" | "hook";
 
 interface FormState {
   encounter: {
@@ -57,8 +72,26 @@ interface FormState {
     loot: boolean;
   };
   dungeon: { seed: string; style: MapStyle; width: number; height: number; rooms: number; level: number; size: number; tags: string; place: boolean; name: string };
+  battlemap: {
+    seed: string;
+    setting: BattlemapSetting | "random";
+    size: BattlemapSize;
+    night: boolean;
+    name: string;
+    /** Place the current encounter in the enemy zone. */
+    place: boolean;
+    /** Map title from the Shop tab, used for shop maps. */
+    shopName: string;
+  };
   loot: { seed: string; cr: number; mode: LootMode };
   shop: { seed: string; type: ShopType; settlement: Settlement };
+  npc: {
+    seed: string;
+    role: NpcRole | "random";
+    race: string;
+    /** Set by the Shop tab's "Keeper as NPC". */
+    fixed: { name: string; race: string; personality: string; quirk: string; occupation: string } | null;
+  };
   hook: { seed: string; level: number; tone: HookTone };
 }
 
@@ -90,7 +123,7 @@ export class ToolkitApp extends ApplicationV2 {
     id: `${MODULE_ID}-app`,
     classes: [MODULE_ID],
     window: { title: "DnD Toolkit", icon: "fa-solid fa-dice-d20", resizable: true },
-    position: { width: 600, height: 720 },
+    position: { width: 680, height: 760 },
     actions: {
       switchTab: ToolkitApp.#onTab,
       generate: ToolkitApp.#onGenerate,
@@ -110,6 +143,13 @@ export class ToolkitApp extends ApplicationV2 {
       lootChat: ToolkitApp.#onLootChat,
       shopMerchant: ToolkitApp.#onShopMerchant,
       shopJournal: ToolkitApp.#onShopJournal,
+      shopBattlemap: ToolkitApp.#onShopBattlemap,
+      shopKeeper: ToolkitApp.#onShopKeeper,
+      npcActor: ToolkitApp.#onNpcActor,
+      npcToken: ToolkitApp.#onNpcToken,
+      npcChat: ToolkitApp.#onNpcChat,
+      npcJournal: ToolkitApp.#onNpcJournal,
+      bmScene: ToolkitApp.#onBmScene,
       shopChat: ToolkitApp.#onShopChat,
       lootJournal: ToolkitApp.#onLootJournal,
       lootActor: ToolkitApp.#onLootActor,
@@ -124,8 +164,12 @@ export class ToolkitApp extends ApplicationV2 {
   /** Monster ids of encounter groups kept when generating again. */
   locked = new Set<string>();
   dungeon: { map: DungeonMap; keys: RoomKey[] } | null = null;
+  battlemap: Battlemap | null = null;
   loot: LootResult | null = null;
   shop: Shop | null = null;
+  npc: Npc | null = null;
+  /** World actor made from the current NPC, so repeat clicks reuse it. */
+  #npcActor: any = null;
   hook: PlotHook | null = null;
   /** Tag suggestions for the datalist, loaded from the catalog on first use. */
   tagList: string[] | null = null;
@@ -138,8 +182,10 @@ export class ToolkitApp extends ApplicationV2 {
     this.form = {
       encounter: { seed: "", level: party.level, size: party.size, difficulty: "moderate", template: "auto", tags: "", source: hasActorPacks ? "compendium" : "srd", loot: true },
       dungeon: { seed: "", style: "dungeon", width: 40, height: 30, rooms: 12, level: party.level, size: party.size, tags: "", place: true, name: "" },
+      battlemap: { seed: "", setting: "random", size: "medium", night: false, name: "", place: true, shopName: "" },
       loot: { seed: "", cr: party.level, mode: "hoard" },
       shop: { seed: "", type: "general", settlement: "town" },
+      npc: { seed: "", role: "random", race: "random", fixed: null },
       hook: { seed: "", level: party.level, tone: "any" },
     };
   }
@@ -149,13 +195,15 @@ export class ToolkitApp extends ApplicationV2 {
   async _renderHTML() {
     const tabBtn = (id: Tab, label: string, icon: string) =>
       `<button type="button" class="${this.tab === id ? "active" : ""}" data-action="switchTab" data-tab="${id}"><i class="${icon}"></i> ${label}</button>`;
-    const body = { encounter: () => this.#encounterHtml(), dungeon: () => this.#dungeonHtml(), loot: () => this.#lootHtml(), shop: () => this.#shopHtml(), hook: () => this.#hookHtml() }[this.tab]();
+    const body = { encounter: () => this.#encounterHtml(), dungeon: () => this.#dungeonHtml(), battlemap: () => this.#battlemapHtml(), loot: () => this.#lootHtml(), shop: () => this.#shopHtml(), npc: () => this.#npcHtml(), hook: () => this.#hookHtml() }[this.tab]();
     return `
       <nav class="dt-tabs">
         ${tabBtn("encounter", "Encounter", "fa-solid fa-dragon")}
         ${tabBtn("dungeon", "Dungeon", "fa-solid fa-dungeon")}
+        ${tabBtn("battlemap", "Battlemap", "fa-solid fa-map-location-dot")}
         ${tabBtn("loot", "Loot", "fa-solid fa-coins")}
         ${tabBtn("shop", "Shop", "fa-solid fa-store")}
+        ${tabBtn("npc", "NPC", "fa-solid fa-user")}
         ${tabBtn("hook", "Plot Hook", "fa-solid fa-scroll")}
       </nav>
       <section class="dt-body">${body}</section>`;
@@ -168,6 +216,8 @@ export class ToolkitApp extends ApplicationV2 {
   _onRender() {
     const canvasEl = this.element.querySelector("canvas.dt-preview") as HTMLCanvasElement | null;
     if (canvasEl && this.dungeon) drawDungeon(canvasEl, this.dungeon.map, { cell: 12, labels: true });
+    const bmCanvas = this.element.querySelector("canvas.dt-bm-preview") as HTMLCanvasElement | null;
+    if (bmCanvas && this.battlemap) drawBattlemap(bmCanvas, this.battlemap, { cell: 20, preview: true });
 
     // Enter in a tag box generates immediately.
     for (const input of this.element.querySelectorAll("input[name=tags]") as NodeListOf<HTMLInputElement>) {
@@ -320,6 +370,33 @@ export class ToolkitApp extends ApplicationV2 {
       : `<p class="dt-empty">Set the options and hit Generate.</p>`}`;
   }
 
+  #battlemapHtml() {
+    const f = this.form.battlemap;
+    const m = this.battlemap;
+    const e = this.encounter;
+    const settings: [string, string][] = [["random", "Random"], ...(Object.entries(BATTLEMAP_SETTINGS) as [BattlemapSetting, { label: string }][]).map(([v, d]): [string, string] => [v, d.label])];
+    const sizes: [string, string][] = [["small", "Small (20×15)"], ["medium", "Medium (28×20)"], ["large", "Large (36×26)"]];
+    return `
+      <div class="dt-row">
+        ${this.#select("battlemap", "setting", "Setting", settings, f.setting)}
+        ${this.#select("battlemap", "size", "Size", sizes, f.size)}
+        <label class="dt-check"><input type="checkbox" data-group="battlemap" name="night" ${f.night ? "checked" : ""}> Night</label>
+      </div>
+      ${this.#seedRow("battlemap")}
+      ${m ? `
+        <div class="dt-preview-wrap"><canvas class="dt-preview dt-bm-preview"></canvas></div>
+        <p class="dt-meta"><strong>${esc(m.title)}</strong> · ${m.width}×${m.height} squares · ${m.lights.length} lights${m.darkness ? ` · darkness ${m.darkness}` : ""} · <span class="dt-zone dt-zone-party">party start</span> <span class="dt-zone dt-zone-enemy">enemy start</span></p>
+        <ul class="dt-tactics">${m.notes.map((n) => `<li>${esc(n)}</li>`).join("")}</ul>
+        <label class="dt-check"><input type="checkbox" data-group="battlemap" name="place" ${f.place && e ? "checked" : ""} ${e ? "" : "disabled"}>
+          ${e ? `Place the current encounter (hidden) at the enemy start: <em>${esc(encounterSummary(e))}</em>` : "Generate an encounter first to drop its monsters in too"}</label>
+        <div class="dt-row">
+          ${this.#field("battlemap", "name", "Scene name", `<input type="text" value="${esc(f.name)}" placeholder="${esc(m.title)}">`)}
+          <button type="button" data-action="bmScene"><i class="fa-solid fa-map"></i> Create Scene</button>
+        </div>
+        <p class="dt-hint">Creates the scene with walls, doors, windows, lights and darkness, plus a battlefield notes journal.</p>`
+      : `<p class="dt-empty">Pick a setting and hit Generate for a quick one-fight map.</p>`}`;
+  }
+
   #lootHtml() {
     const f = this.form.loot;
     const l = this.loot;
@@ -364,10 +441,38 @@ export class ToolkitApp extends ApplicationV2 {
         </div>
         <div class="dt-row dt-actions">
           <button type="button" data-action="shopMerchant" ${piles ? "" : "disabled"} title="${piles ? "Create an Item Piles merchant players can buy from" : "Requires the Item Piles module"}"><i class="fa-solid fa-shop"></i> Item Piles merchant</button>
+          <button type="button" data-action="shopKeeper" title="Flesh out the shopkeeper as an NPC with a voice, secret and actor"><i class="fa-solid fa-user"></i> Keeper NPC</button>
+          <button type="button" data-action="shopBattlemap" title="Make a battlemap of this shop's floor"><i class="fa-solid fa-map-location-dot"></i> Battlemap</button>
           <button type="button" data-action="shopJournal"><i class="fa-solid fa-book"></i> Journal</button>
           <button type="button" data-action="shopChat"><i class="fa-solid fa-comment"></i> Chat</button>
         </div>`
       : `<p class="dt-empty">Pick a shop and settlement size, then generate.</p>`}`;
+  }
+
+  #npcHtml() {
+    const f = this.form.npc;
+    const n = this.npc;
+    const roles: [string, string][] = [["random", "Random"], ...(Object.entries(NPC_ROLES) as [NpcRole, { label: string }][]).map(([v, d]): [string, string] => [v, d.label])];
+    const races: [string, string][] = [["random", "Random"], ...NPC_RACES.map((r): [string, string] => [r, r])];
+    return `
+      <div class="dt-row">
+        ${this.#select("npc", "role", "Role", roles, f.role)}
+        ${this.#select("npc", "race", "Race", races, f.race)}
+      </div>
+      ${f.fixed ? `<p class="dt-hint"><i class="fa-solid fa-store"></i> Keeping the shopkeeper ${esc(f.fixed.name)}. Change role or race to roll a new NPC.</p>` : ""}
+      ${this.#seedRow("npc")}
+      ${n ? `
+        <div class="dt-card">
+          <p class="dt-enc-head"><strong>${esc(n.name)}</strong> · ${esc(n.age)} ${esc(n.race)} ${esc(n.occupation)}</p>
+          <ul class="dt-npc">${npcTraits(n).map(([label, text, gm]) => `<li class="${gm ? "dt-gm" : ""}"><strong>${esc(label)}${gm ? " (GM)" : ""}:</strong> ${esc(text)}</li>`).join("")}</ul>
+        </div>
+        <div class="dt-row dt-actions">
+          <button type="button" data-action="npcActor" title="Copy the ${esc(n.statblock)} statblock as a named actor with this NPC in its biography"><i class="fa-solid fa-user-plus"></i> Create actor</button>
+          <button type="button" data-action="npcToken" title="Create the actor (once) and drop its token at the center of your view"><i class="fa-solid fa-location-dot"></i> Place token</button>
+          <button type="button" data-action="npcChat"><i class="fa-solid fa-comment"></i> Chat (GM)</button>
+          <button type="button" data-action="npcJournal"><i class="fa-solid fa-book"></i> Journal</button>
+        </div>`
+      : `<p class="dt-empty">Pick a role (or leave it random) and generate someone to talk to.</p>`}`;
   }
 
   #hookHtml() {
@@ -422,6 +527,21 @@ export class ToolkitApp extends ApplicationV2 {
           ? generateCave({ seed, width: f.width, height: f.height, chambers: f.rooms })
           : generateDungeon({ seed, width: f.width, height: f.height, maxRooms: f.rooms });
         this.dungeon = { map, keys: stockDungeon(map, { partyLevel: f.level, partySize: f.size, tags: f.tags, catalog, magicItems }) };
+      } else if (group === "battlemap") {
+        const f = this.form.battlemap;
+        this.battlemap = generateBattlemap({ seed, setting: f.setting, size: f.size, night: f.night, title: f.setting === "shop" && f.shopName ? f.shopName : undefined });
+      } else if (group === "npc") {
+        const f = this.form.npc;
+        if (f.fixed && (f.role !== "merchant" || f.race !== f.fixed.race)) f.fixed = null;
+        const fixed = f.fixed;
+        this.npc = generateNpc({
+          seed,
+          role: fixed ? "merchant" : f.role,
+          race: fixed?.race ?? f.race,
+          name: fixed?.name,
+          traits: fixed ? { personality: fixed.personality, quirk: fixed.quirk, occupation: fixed.occupation } : undefined,
+        });
+        this.#npcActor = null;
       } else if (group === "shop") {
         const f = this.form.shop;
         const items = this.form.encounter.source === "srd" ? undefined : await getShopItems(itemFamily);
@@ -572,6 +692,60 @@ export class ToolkitApp extends ApplicationV2 {
   static #onShopMerchant(this: ToolkitApp, _e: Event, target: HTMLButtonElement) {
     const s = this.shop;
     if (s) this.#run(target, () => createMerchant(s));
+  }
+
+  static #onShopBattlemap(this: ToolkitApp) {
+    if (!this.shop) return;
+    this.#readForm();
+    Object.assign(this.form.battlemap, { setting: "shop", shopName: this.shop.name, seed: "", name: "" });
+    this.tab = "battlemap";
+    this.#generate("battlemap");
+  }
+
+  static #onBmScene(this: ToolkitApp, _e: Event, target: HTMLButtonElement) {
+    const m = this.battlemap;
+    if (!m) return;
+    this.#readForm();
+    const f = this.form.battlemap;
+    this.#run(target, async () => {
+      const scene = await createBattlemapScene(m, { name: f.name || undefined, encounter: f.place ? this.encounter : null });
+      ui.notifications.info(`Created scene "${scene.name}".`);
+    });
+  }
+
+  static #onShopKeeper(this: ToolkitApp) {
+    const s = this.shop;
+    if (!s) return;
+    this.#readForm();
+    const k = s.keeper;
+    const occupation = `owner of ${s.name}`;
+    Object.assign(this.form.npc, { seed: "", role: "merchant", race: k.race, fixed: { name: k.name, race: k.race, personality: k.personality, quirk: k.quirk, occupation } });
+    this.tab = "npc";
+    this.#generate("npc");
+  }
+
+  /** The current NPC's world actor, created on first use. */
+  async #ensureNpcActor() {
+    if (!this.#npcActor || !game.actors.get(this.#npcActor.id)) this.#npcActor = await createNpcActor(this.npc!);
+    return this.#npcActor;
+  }
+
+  static #onNpcActor(this: ToolkitApp, _e: Event, target: HTMLButtonElement) {
+    if (!this.npc) return;
+    this.#run(target, async () => (await this.#ensureNpcActor())?.sheet?.render(true));
+  }
+
+  static #onNpcToken(this: ToolkitApp, _e: Event, target: HTMLButtonElement) {
+    if (!this.npc) return;
+    this.#run(target, async () => placeNpcToken(await this.#ensureNpcActor()));
+  }
+
+  static #onNpcChat(this: ToolkitApp) {
+    if (this.npc) postToChat(npcHtml(this.npc), true);
+  }
+
+  static #onNpcJournal(this: ToolkitApp) {
+    if (this.npc) createJournal(this.npc.name, npcHtml(this.npc, { heading: false }), { kind: "npc", seed: this.npc.seed });
   }
 
   static #onShopJournal(this: ToolkitApp) {

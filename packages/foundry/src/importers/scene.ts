@@ -4,10 +4,13 @@ import { ensureFolder, MODULE_ID } from "../util.ts";
 import { createRoomKeyJournal } from "./journal.ts";
 import { linkEncounter, placeEncounter } from "./tokens.ts";
 
-const filePicker = () => foundry.applications?.apps?.FilePicker?.implementation ?? (globalThis as any).FilePicker;
+// v13 namespaces it; v12 declares `class FilePicker` at the top level of a classic script, which is a
+// global binding but not a property of globalThis.
+const filePicker = () => foundry.applications?.apps?.FilePicker?.implementation ?? (typeof FilePicker === "undefined" ? undefined : FilePicker);
 
-async function uploadImage(blob: Blob, name: string): Promise<string> {
+export async function uploadImage(blob: Blob, name: string): Promise<string> {
   const FP = filePicker();
+  if (!FP) throw new Error("Foundry's FilePicker isn't available, so the map image can't be uploaded.");
   const dir = `worlds/${game.world.id}/${MODULE_ID}`;
   try {
     await FP.createDirectory("data", dir);
@@ -40,7 +43,8 @@ export async function createDungeonScene(map: DungeonMap, opts: SceneImportOptio
   const src = await uploadImage(blob, `dungeon-${map.seed.replace(/[^\w-]/g, "_")}-${Date.now()}.webp`);
 
   const walls = map.walls.map((w) => ({
-    c: [w.x1 * gs, w.y1 * gs, w.x2 * gs, w.y2 * gs],
+    // Foundry wants whole pixels; smoothed cave walls fall between grid lines.
+    c: [w.x1, w.y1, w.x2, w.y2].map((v) => Math.round(v * gs)),
     door: w.door ? CONST.WALL_DOOR_TYPES.DOOR : CONST.WALL_DOOR_TYPES.NONE,
   }));
 

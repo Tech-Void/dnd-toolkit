@@ -9,6 +9,8 @@ declare const Hooks: any;
 declare const Scene: any;
 declare const JournalEntry: any;
 declare const Item: any;
+declare const Actor: any;
+declare const FilePicker: any;
 declare const Folder: any;
 declare const ChatMessage: any;
 declare const TokenDocument: any;

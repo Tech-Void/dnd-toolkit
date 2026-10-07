@@ -62,6 +62,8 @@ export interface DungeonMap {
   cells: number[][];
   rooms: Room[];
   walls: WallSegment[];
+  /** Smoothed floor outlines in grid units (caves); the walls follow these. */
+  outlines?: [number, number][][];
 }
 
 const center = roomCenter;

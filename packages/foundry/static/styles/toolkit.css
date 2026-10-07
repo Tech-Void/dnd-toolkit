@@ -108,3 +108,12 @@
 .dnd-toolkit .dt-stock .dt-price { text-align: right; width: 7rem; white-space: nowrap; }
 .dnd-toolkit .dt-stock .dt-magic td:first-child { font-weight: bold; }
 .dnd-toolkit .dt-stock em { font-weight: normal; opacity: 0.7; }
+
+.dnd-toolkit .dt-tabs button { white-space: nowrap; padding: 0 0.3rem; }
+.dnd-toolkit .dt-bm-preview { image-rendering: auto; }
+.dnd-toolkit .dt-zone { padding: 0 0.3rem; border-radius: 3px; }
+.dnd-toolkit .dt-zone-party { background: rgba(60, 130, 255, 0.35); }
+.dnd-toolkit .dt-zone-enemy { background: rgba(230, 50, 50, 0.3); }
+.dnd-toolkit .dt-npc { margin: 0.3rem 0; padding-left: 1.1rem; }
+.dnd-toolkit .dt-npc li { margin: 0.15rem 0; }
+.dnd-toolkit .dt-npc .dt-gm { opacity: 0.8; font-style: italic; }

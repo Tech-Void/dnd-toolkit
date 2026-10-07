@@ -1,5 +1,6 @@
 import { createRng, type Rng } from "./rng.ts";
-import { buildWalls, FLOOR, ROCK, type DungeonMap, type Room } from "./dungeon.ts";
+import { FLOOR, ROCK, type DungeonMap, type Room } from "./dungeon.ts";
+import { floorOutlines, loopWalls, smoothLoop } from "./outline.ts";
 
 export interface CaveOptions {
   width?: number;
@@ -230,6 +231,7 @@ export function generateCave(opts: CaveOptions = {}): DungeonMap {
   const floorCount = cells.flat().filter((c) => c === FLOOR).length;
   const count = opts.chambers ?? Math.max(4, Math.min(14, Math.round(floorCount / 70)));
   const rooms = chambers(rng, cells, count);
-  const walls = buildWalls(cells, width, height, new Set());
-  return { seed: rng.seed, style: "cave", width, height, cells, rooms, walls };
+  // Rounded rock faces instead of stair-stepped cell edges; the walls follow the same curves.
+  const outlines = floorOutlines(cells).map((loop) => smoothLoop(loop, 2));
+  return { seed: rng.seed, style: "cave", width, height, cells, rooms, walls: loopWalls(outlines), outlines };
 }

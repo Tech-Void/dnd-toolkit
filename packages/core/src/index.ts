@@ -7,3 +7,6 @@ export * from "./encounter.ts";
 export * from "./roles.ts";
 export * from "./shops.ts";
 export * from "./cave.ts";
+export * from "./outline.ts";
+export * from "./battlemap.ts";
+export * from "./npc.ts";

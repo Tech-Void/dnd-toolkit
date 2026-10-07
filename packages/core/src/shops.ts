@@ -1,4 +1,5 @@
 import { createRng, type Rng } from "./rng.ts";
+import { FIRST_NAMES } from "./data/names.ts";
 import { generateHook } from "./hooks.ts";
 import { EQUIPMENT_ROWS } from "./data/equipment.ts";
 import { MAGIC_ITEMS, RARITY_VALUE_GP, type Rarity } from "./data/treasure.ts";
@@ -165,17 +166,6 @@ export const BUILTIN_SHOP_ITEMS: ShopItemRef[] = [
 // ---------------------------------------------------------------------------
 // Shopkeepers
 
-const KEEPER_NAMES: Record<string, string[]> = {
-  human: ["Aldric", "Bertha", "Corin", "Dagna", "Edda", "Fenwick", "Greta", "Hollis", "Ilse", "Jory", "Marta", "Osric"],
-  dwarf: ["Brottor", "Dagnal", "Eberk", "Gunnloda", "Helja", "Kildrak", "Orsik", "Rurik", "Thora", "Vondal"],
-  halfling: ["Andry", "Bree", "Cade", "Eldon", "Kithri", "Lyle", "Merla", "Nedda", "Perrin", "Seraphina"],
-  elf: ["Adrie", "Caelynn", "Erevan", "Faral", "Ielenia", "Laucian", "Naivara", "Quelenna", "Thamior", "Vadania"],
-  gnome: ["Alston", "Bimpnottin", "Boddynock", "Carlin", "Ellyjobell", "Fonkin", "Nissa", "Orryn", "Roywyn", "Zook"],
-  "half-orc": ["Dench", "Engong", "Holg", "Imsh", "Krusk", "Myev", "Ovak", "Shautha", "Sutha", "Volen"],
-  tiefling: ["Akmenos", "Bryseis", "Damakos", "Kallista", "Lerissa", "Mordai", "Nemeia", "Orianna", "Skamos", "Rieta"],
-  dragonborn: ["Arjhan", "Biri", "Donaar", "Harann", "Kava", "Medrash", "Nala", "Perra", "Sora", "Torinn"],
-};
-
 const KEEPER_RACE_WEIGHTS: Partial<Record<ShopType, Partial<Record<string, number>>>> = {
   blacksmith: { dwarf: 30 },
   armorer: { dwarf: 30 },
@@ -313,7 +303,7 @@ export function generateShop(opts: ShopOptions): Shop {
   // Keeper
   const raceWeights = { human: 40, dwarf: 10, halfling: 10, elf: 10, gnome: 10, "half-orc": 6, tiefling: 6, dragonborn: 6, ...KEEPER_RACE_WEIGHTS[opts.type] };
   const race = rng.weighted(Object.entries(raceWeights) as [string, number][]);
-  const keeper: ShopKeeper = { name: rng.pick(KEEPER_NAMES[race]!), race, personality: rng.pick(PERSONALITIES), quirk: rng.pick(QUIRKS) };
+  const keeper: ShopKeeper = { name: rng.pick(FIRST_NAMES[race]!), race, personality: rng.pick(PERSONALITIES), quirk: rng.pick(QUIRKS) };
   const name = rng.chance(0.5) ? `The ${rng.pick(NAME_ADJECTIVES)} ${rng.pick(def.nouns)}` : `${keeper.name}'s ${def.goods}`;
 
   // Prices: small places charge more for less; big cities compete.
