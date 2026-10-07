@@ -86,6 +86,12 @@
 .dnd-toolkit .dt-monster a { font-weight: bold; cursor: pointer; }
 .dnd-toolkit .dt-count { font-weight: bold; min-width: 2rem; text-align: right; }
 .dnd-toolkit .dt-sub { margin-left: auto; font-size: var(--font-size-11, 11px); opacity: 0.75; }
+.dnd-toolkit .dt-lock { flex: 0 0 auto; width: 26px; height: 26px; padding: 0; line-height: 1; opacity: 0.45; }
+.dnd-toolkit .dt-lock.active { opacity: 1; color: #b8860b; }
+.dnd-toolkit .dt-wave { margin-top: 0.5rem; padding-top: 0.4rem; border-top: 1px dashed currentColor; }
+.dnd-toolkit .dt-wave .dt-enc-head { display: flex; align-items: center; gap: 0.4rem; }
+.dnd-toolkit .dt-wave .dt-enc-head button { flex: 0 0 auto; width: auto; padding: 0 0.5rem; line-height: 1.6; }
+.dnd-toolkit .dt-wave .dt-enc-head button:first-of-type { margin-left: auto; }
 .dnd-toolkit .dt-tactics { margin: 0.3rem 0; padding-left: 1.1rem; font-size: var(--font-size-12, 12px); }
 .dnd-toolkit .dt-card p { margin: 0.3rem 0; }
 .dnd-toolkit .dt-rating { font-weight: bold; text-transform: capitalize; }

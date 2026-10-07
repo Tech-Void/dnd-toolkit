@@ -1,4 +1,4 @@
-import { crLabel, TEMPLATES, type Encounter, type LootResult, type PlotHook, type RoomKey } from "@dnd-toolkit/core";
+import { crLabel, encounterXp, rateEncounter, TEMPLATES, type Encounter, type EncounterGroup, type LootResult, type PlotHook, type RoomKey } from "@dnd-toolkit/core";
 import { ensureFolder, esc, MODULE_ID } from "../util.ts";
 
 export function lootHtml(loot: LootResult): string {
@@ -21,18 +21,28 @@ export function hookHtml(hook: PlotHook): string {
 }
 
 /** Monster list with @UUID links (click to open the statblock), tactics, situation and terrain. */
-export function encounterHtml(e: Encounter, { heading = true } = {}): string {
-  const monsters = e.groups
+const monsterList = (groups: readonly EncounterGroup[]) =>
+  `<ul>${groups
     .map((g) => {
       const label = g.monster.uuid ? `@UUID[${g.monster.uuid}]{${esc(g.name)}}` : esc(g.name);
       return `<li>${g.count > 1 ? `${g.count}× ` : ""}${label} <em>(CR ${crLabel(g.monster.cr)}${g.role ? `, ${g.role}` : ""})</em></li>`;
     })
-    .join("");
+    .join("")}</ul>`;
+
+export function wavesHtml(e: Encounter): string {
+  if (!e.waves?.length) return "";
+  const total = encounterXp(e);
+  return `<p><strong>Waves</strong> · ${total.toLocaleString()} XP in all, ${rateEncounter(total, e.partyLevel, e.partySize)}</p>` +
+    e.waves.map((w) => `<p><em>Round ${w.round}</em> · ${w.xp.toLocaleString()} XP · ${esc(w.arrival)}</p>${monsterList(w.groups)}`).join("");
+}
+
+export function encounterHtml(e: Encounter, { heading = true } = {}): string {
   const rating = e.rating === e.difficulty ? e.rating : `${e.rating} (asked for ${e.difficulty})`;
   return (heading ? `<h3>${esc(TEMPLATES[e.template])}</h3>` : "") +
     `<p><strong>${esc(rating)}</strong> · ${e.totalXp.toLocaleString()} / ${e.budget.toLocaleString()} XP · ${e.partySize} PCs of level ${e.partyLevel}</p>` +
-    `<ul>${monsters}</ul>` +
+    monsterList(e.groups) +
     `<p><strong>Tactics</strong></p><ul>${e.tactics.map((t) => `<li>${esc(t)}</li>`).join("")}</ul>` +
+    wavesHtml(e) +
     `<p><strong>Situation:</strong> ${esc(e.situation)}</p>` +
     `<p><strong>Terrain:</strong> ${esc(e.terrain)}</p>` +
     (e.loot ? `<p><strong>Treasure</strong></p>${lootHtml(e.loot)}` : "") +

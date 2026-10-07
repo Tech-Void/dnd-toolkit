@@ -160,6 +160,21 @@ export function matchesQuery(m: MonsterEntry, q: TagQuery, race?: string): boole
   return q.clauses.some((clause) => clause.every((t) => has(m, t) || (t === race && canReskin(m, clause, race))));
 }
 
+/**
+ * Tags marking an exotic variant: shapechangers, lycanthropes, and hybrids carrying another
+ * creature type's tag (Half-Red Dragon Veteran is a humanoid tagged "dragon").
+ */
+const exoticMarkers = (m: MonsterEntry) =>
+  m.tags.filter((t) => t === "shapechanger" || t === "lycanthrope" || (CREATURE_TYPES.has(t) && t !== m.type));
+
+/** Exotic variants are odd picks for "humans" or "urban" unless the query names them (or the monster). */
+export function isUnaskedExotic(m: MonsterEntry, q: TagQuery): boolean {
+  const markers = exoticMarkers(m);
+  if (!markers.length) return false;
+  const asked = q.clauses.flat();
+  return !asked.some((t) => markers.includes(t) || (!CREATURE_TYPES.has(t) && !RACES.has(t) && m.name.toLowerCase().includes(t)));
+}
+
 export const racesIn = (q: TagQuery) => [...new Set(q.clauses.flat().filter((t) => RACES.has(t)))];
 
 // ---------------------------------------------------------------------------
@@ -214,6 +229,19 @@ export interface EncounterOptions {
   loot?: boolean;
   magicItems?: MagicItemPool;
   seed?: string | number;
+  /** Groups to keep as-is; the rest of the budget and creature cap is filled around them. */
+  locked?: readonly EncounterGroup[];
+  /** Race for reskins, instead of picking one of the races in the query. */
+  race?: string;
+  /** XP budget, instead of the one for `difficulty`. */
+  budget?: number;
+  /**
+   * When the query names no creature type or race, stick to these creature types (if any match)
+   * instead of picking one at random. Defaults to the locked groups' types.
+   */
+  creatureTypes?: readonly string[];
+  /** Monsters to pick more often, e.g. the main encounter's when building a wave. */
+  favor?: readonly MonsterEntry[];
 }
 
 export interface EncounterGroup {
@@ -242,7 +270,19 @@ export interface Encounter {
   situation: string;
   terrain: string;
   loot?: LootResult;
+  /** Reinforcements added with addWave(), in arrival order. */
+  waves?: Wave[];
   warnings: string[];
+}
+
+export interface Wave {
+  seed: string;
+  /** Round at the start of which the wave arrives. */
+  round: number;
+  arrival: string;
+  groups: EncounterGroup[];
+  xp: number;
+  tactics: string[];
 }
 
 /** weight: native statblocks (a real Orc) outweigh reskinned generic NPCs (Orc Veteran). */
@@ -302,6 +342,17 @@ const TERRAIN = [
   "Slick ice: DC 10 Dex save when dashing or knocked back, or fall prone.",
   "Open ground with no cover; ranged attackers love it.",
 ];
+
+/** Rough shape of a finished group list, for encounters built around locked groups. */
+function shapeOf(groups: readonly EncounterGroup[]): EncounterTemplate {
+  const n = groups.reduce((sum, g) => sum + g.count, 0);
+  if (n === 1) return "solo";
+  if (n === 2) return "elite";
+  if (n >= 8 && groups.length <= 2) return "horde";
+  const [top, next] = groups;
+  if (top!.count === 1 && next && top!.xpEach >= 2 * next.xpEach) return "leader";
+  return "squad";
+}
 
 function weightedRole(m: MonsterEntry, prefer: readonly Role[]): Role | undefined {
   return m.roles.find((r) => prefer.includes(r)) ?? m.roles[0];
@@ -395,28 +446,44 @@ export function generateEncounter(opts: EncounterOptions): Encounter {
   const partyLevel = Math.max(1, Math.min(20, opts.partyLevel));
   const partySize = Math.max(1, opts.partySize ?? 4);
   const difficulty = opts.difficulty ?? "moderate";
-  const cap = opts.maxCreatures ?? Math.max(4, partySize * 2);
-  const B = xpBudget(partyLevel, partySize, difficulty);
+  const locked = (opts.locked ?? []).map((g) => ({ ...g }));
+  const lockedIds = new Set(locked.map((g) => g.monster.id));
+  const favored = new Set((opts.favor ?? []).map((m) => m.id));
+  const fullBudget = opts.budget ?? xpBudget(partyLevel, partySize, difficulty);
+  // With locked groups, only the remainder of the budget and cap is generated.
+  const B = fullBudget - locked.reduce((sum, g) => sum + g.xpEach * g.count, 0);
+  const cap = (opts.maxCreatures ?? Math.max(4, partySize * 2)) - locked.reduce((sum, g) => sum + g.count, 0);
   const catalog = opts.catalog ?? SRD_MONSTERS;
   const warnings: string[] = [];
 
   const query = parseTags(opts.tags ?? "");
   const races = racesIn(query);
-  const race = races.length ? rng.pick(races) : undefined;
+  const race = opts.race ?? (races.length ? rng.pick(races) : undefined);
   let matched = catalog.filter((m) => matchesQuery(m, query, race));
+  const ordinary = matched.filter((m) => !isUnaskedExotic(m, query));
+  if (ordinary.length) matched = ordinary;
   // No creature type or race in the query (blank, or just terrain/theme like "forest"): usually
   // theme the encounter around one creature type so it hangs together.
   const typed = query.clauses.flat().some((t) => CREATURE_TYPES.has(t) || RACES.has(t));
-  if (!typed && (!query.clauses.length || rng.chance(0.7))) {
+  const themeTypes = opts.creatureTypes ?? locked.map((g) => g.monster.type);
+  if (!typed && themeTypes.length) {
+    const same = matched.filter((m) => themeTypes.includes(m.type));
+    if (same.length) matched = same;
+  } else if (!typed && (!query.clauses.length || rng.chance(0.7))) {
     const fits = matched.filter((m) => xpForCr(m.cr) <= B && xpForCr(m.cr) >= B / 20);
     if (fits.length) {
       const type = rng.pick(fits).type;
       matched = matched.filter((m) => m.type === type);
     }
   }
-  if (!matched.length) throw new Error(`No monsters match "${opts.tags}".`);
+  if (!matched.length && !locked.length) throw new Error(`No monsters match "${opts.tags}".`);
   const pool: Pick[] = matched
-    .map((monster) => ({ monster, xp: xpForCr(monster.cr), weight: race && isAnyRace(monster) ? 1 : 6 }))
+    .filter((monster) => !lockedIds.has(monster.id))
+    .map((monster) => ({
+      monster,
+      xp: xpForCr(monster.cr),
+      weight: (race && isAnyRace(monster) ? 1 : 6) * (favored.has(monster.id) ? 4 : 1),
+    }))
     .filter((p) => p.xp > 0);
 
   // Try every allowed template, then choose randomly among drafts that fit the budget well. Always
@@ -437,8 +504,9 @@ export function generateEncounter(opts: EncounterOptions): Encounter {
       results.push({ draft, template, score: Math.abs(xp - B) / B, weight });
     }
   };
-  if (fixed) tryTemplate(fixed);
-  if (!results.length) for (const [t] of TEMPLATE_WEIGHTS) if (t !== fixed) tryTemplate(t);
+  const room = B > 0 && cap > 0 && pool.length > 0;
+  if (room && fixed) tryTemplate(fixed);
+  if (room && !results.length) for (const [t] of TEMPLATE_WEIGHTS) if (t !== fixed) tryTemplate(t);
 
   let best: Result | null = null;
   if (results.length) {
@@ -450,39 +518,30 @@ export function generateEncounter(opts: EncounterOptions): Encounter {
     best = rng.weighted(good.map((r) => [r, r.weight / perTemplate.get(r.template)!] as const));
   }
 
-  if (!best) {
+  if (!best && locked.length) {
+    // Leftover budget too small for anything matching: keep just the locked groups.
+    if (room && B >= fullBudget * 0.15) warnings.push(`Nothing matching fits the ${B.toLocaleString("en-US")} XP left beside the locked creatures.`);
+  } else if (!best) {
     // Everything matching is too strong (or weak) for this party: take the closest single monster.
     const closest = [...pool].sort((a, b) => Math.abs(a.xp - B) - Math.abs(b.xp - B))[0]!;
     best = { draft: new Map([[closest.monster, 1]]), template: "solo", score: 1, weight: 1 };
     warnings.push(`Nothing matching "${opts.tags}" fits a ${difficulty} budget of ${B} XP; using the closest match.`);
   }
-  if (opts.template && opts.template !== "auto" && best.template !== opts.template) {
+  if (best && !locked.length && opts.template && opts.template !== "auto" && best.template !== opts.template) {
     warnings.push(`Couldn't build a ${TEMPLATES[opts.template].toLowerCase()} from the matching monsters; made a ${TEMPLATES[best.template].toLowerCase()} instead.`);
   }
 
-  const template = best.template;
-  const groups: EncounterGroup[] = [...best.draft]
-    .map(([monster, count]) => ({
-      monster,
-      count,
-      xpEach: xpForCr(monster.cr),
-      name: race && isAnyRace(monster) && !terms(monster).has(race) ? `${race.charAt(0).toUpperCase()}${race.slice(1)} ${monster.name}` : monster.name,
-      role: weightedRole(monster, template === "solo" ? ["solo"] : ["leader", "caster", "artillery", "controller", "skirmisher", "brute", "minion"]),
-    }))
-    .sort((a, b) => b.xpEach - a.xpEach);
+  const fresh = best ? toGroups(best.draft, best.template, race) : [];
+  const groups = [...locked, ...fresh].sort((a, b) => b.xpEach - a.xpEach);
+  const template = locked.length ? shapeOf(groups) : best!.template;
 
-  // In a leader template the strongest is the leader regardless of statblock role.
-  if (template === "leader") groups[0]!.role = "leader";
-  if (template === "solo") groups[0]!.role = "solo";
+  // In a leader template the strongest is the leader regardless of statblock role (locked roles stay).
+  if (!locked.includes(groups[0]!)) {
+    if (template === "leader") groups[0]!.role = "leader";
+    if (template === "solo") groups[0]!.role = "solo";
+  }
 
-  const tactics = groups.map((g) => {
-    const role = g.role ?? "brute";
-    // Animals and mindless things lead by instinct, not orders.
-    const [one, many] = role === "leader" && BESTIAL.has(g.monster.type) ? ALPHA_TACTICS : ROLE_TACTICS[role];
-    return g.count > 1 ? `${g.count}× ${g.name} ${many}.` : `The ${g.name} ${one}.`;
-  });
-
-  const totalXp = draftXp(best.draft);
+  const totalXp = groups.reduce((sum, g) => sum + g.xpEach * g.count, 0);
   const maxCr = Math.max(...groups.map((g) => g.monster.cr));
   const encounter: Encounter = {
     seed: rng.seed,
@@ -491,12 +550,12 @@ export function generateEncounter(opts: EncounterOptions): Encounter {
     partySize,
     difficulty,
     rating: rateEncounter(totalXp, partyLevel, partySize),
-    budget: B,
+    budget: fullBudget,
     totalXp,
     template,
     race,
     groups,
-    tactics,
+    tactics: tacticsFor(groups),
     situation: rng.pick(SITUATIONS),
     terrain: rng.pick(TERRAIN),
     warnings,
@@ -504,6 +563,75 @@ export function generateEncounter(opts: EncounterOptions): Encounter {
   if (opts.loot) encounter.loot = generateLoot({ cr: maxCr, mode: "individual", magicItems: opts.magicItems, seed: `${rng.seed}:loot` });
   return encounter;
 }
+
+function toGroups(draft: Draft, template: EncounterTemplate, race?: string): EncounterGroup[] {
+  return [...draft]
+    .map(([monster, count]) => ({
+      monster,
+      count,
+      xpEach: xpForCr(monster.cr),
+      name: race && isAnyRace(monster) && !terms(monster).has(race) ? `${race.charAt(0).toUpperCase()}${race.slice(1)} ${monster.name}` : monster.name,
+      role: weightedRole(monster, template === "solo" ? ["solo"] : ["leader", "caster", "artillery", "controller", "skirmisher", "brute", "minion"]),
+    }))
+    .sort((a, b) => b.xpEach - a.xpEach);
+}
+
+function tacticsFor(groups: readonly EncounterGroup[]): string[] {
+  return groups.map((g) => {
+    const role = g.role ?? "brute";
+    // Animals and mindless things lead by instinct, not orders.
+    const [one, many] = role === "leader" && BESTIAL.has(g.monster.type) ? ALPHA_TACTICS : ROLE_TACTICS[role];
+    return g.count > 1 ? `${g.count}× ${g.name} ${many}.` : `The ${g.name} ${one}.`;
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Waves
+
+const ARRIVALS = [
+  "Reinforcements come running from behind the enemy line.",
+  "They burst in from the flank, through a door or gap nobody was watching.",
+  "They come from behind the party, cutting off the retreat.",
+  "They drop from above: a ledge, the rafters, or a hole in the ceiling.",
+  "They were lying in wait and spring up among the PCs.",
+  "Horns or shouts give a round's warning; they arrive from the far side.",
+];
+
+export interface WaveOptions {
+  catalog?: readonly MonsterEntry[];
+  /** Wave budget as a share of the encounter's budget. Default 0.5. */
+  share?: number;
+  seed?: string | number;
+}
+
+/**
+ * Add a wave of reinforcements: same tags, race and creature types at about half the budget,
+ * arriving a couple of rounds in (after any earlier wave). Returns a new encounter.
+ */
+export function addWave(e: Encounter, opts: WaveOptions = {}): Encounter {
+  const rng = createRng(opts.seed);
+  const prev = e.waves ?? [];
+  const wave = generateEncounter({
+    partyLevel: e.partyLevel,
+    partySize: e.partySize,
+    tags: e.tags,
+    race: e.race,
+    budget: Math.round(e.budget * (opts.share ?? 0.5)),
+    creatureTypes: [...new Set(e.groups.map((g) => g.monster.type))],
+    // Reinforcements are usually more of the same.
+    favor: e.groups.map((g) => g.monster),
+    catalog: opts.catalog,
+    seed: `${rng.seed}:wave`,
+  });
+  const round = (prev.at(-1)?.round ?? 0) + rng.int(2, 3);
+  return {
+    ...e,
+    waves: [...prev, { seed: rng.seed, round, arrival: rng.pick(ARRIVALS), groups: wave.groups, xp: wave.totalXp, tactics: wave.tactics }],
+  };
+}
+
+/** XP of the encounter plus all its waves. */
+export const encounterXp = (e: Encounter) => e.totalXp + (e.waves ?? []).reduce((sum, w) => sum + w.xp, 0);
 
 /** One-line summary, e.g. "Orc Veteran, 4× Orc (moderate, 1,300 XP)". */
 export function encounterSummary(e: Encounter): string {

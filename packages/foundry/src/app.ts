@@ -1,6 +1,10 @@
 import {
+  addWave,
   crLabel,
   DIFFICULTIES,
+  encounterXp,
+  rateEncounter,
+  type EncounterGroup,
   formatPrice,
   generateShop,
   SETTLEMENTS,
@@ -88,7 +92,7 @@ export class ToolkitApp extends ApplicationV2 {
     window: { title: "DnD Toolkit", icon: "fa-solid fa-dice-d20", resizable: true },
     position: { width: 600, height: 720 },
     actions: {
-      tab: ToolkitApp.#onTab,
+      switchTab: ToolkitApp.#onTab,
       generate: ToolkitApp.#onGenerate,
       reroll: ToolkitApp.#onReroll,
       addTag: ToolkitApp.#onAddTag,
@@ -96,6 +100,10 @@ export class ToolkitApp extends ApplicationV2 {
       openDoc: ToolkitApp.#onOpenDoc,
       encPlace: ToolkitApp.#onEncPlace,
       encCombat: ToolkitApp.#onEncCombat,
+      encLock: ToolkitApp.#onEncLock,
+      encWave: ToolkitApp.#onEncWave,
+      encWaveIn: ToolkitApp.#onEncWaveIn,
+      encWaveRemove: ToolkitApp.#onEncWaveRemove,
       encChat: ToolkitApp.#onEncChat,
       encJournal: ToolkitApp.#onEncJournal,
       toScene: ToolkitApp.#onToScene,
@@ -113,6 +121,8 @@ export class ToolkitApp extends ApplicationV2 {
   tab: Tab = "encounter";
   form: FormState;
   encounter: Encounter | null = null;
+  /** Monster ids of encounter groups kept when generating again. */
+  locked = new Set<string>();
   dungeon: { map: DungeonMap; keys: RoomKey[] } | null = null;
   loot: LootResult | null = null;
   shop: Shop | null = null;
@@ -138,7 +148,7 @@ export class ToolkitApp extends ApplicationV2 {
 
   async _renderHTML() {
     const tabBtn = (id: Tab, label: string, icon: string) =>
-      `<button type="button" class="${this.tab === id ? "active" : ""}" data-action="tab" data-tab="${id}"><i class="${icon}"></i> ${label}</button>`;
+      `<button type="button" class="${this.tab === id ? "active" : ""}" data-action="switchTab" data-tab="${id}"><i class="${icon}"></i> ${label}</button>`;
     const body = { encounter: () => this.#encounterHtml(), dungeon: () => this.#dungeonHtml(), loot: () => this.#lootHtml(), shop: () => this.#shopHtml(), hook: () => this.#hookHtml() }[this.tab]();
     return `
       <nav class="dt-tabs">
@@ -231,29 +241,55 @@ export class ToolkitApp extends ApplicationV2 {
       ${this.encounter ? this.#encounterPreview(this.encounter) : `<p class="dt-empty">Pick tags (or leave blank for anything) and hit Generate — or press Enter in the tag box.</p>`}`;
   }
 
-  #encounterPreview(e: Encounter) {
-    const rows = e.groups
-      .map((g) => `<li class="dt-monster">
+  #monsterRows(groups: readonly EncounterGroup[], lockable: boolean) {
+    return groups
+      .map((g) => {
+        const locked = this.locked.has(g.monster.id);
+        const lock = lockable
+          ? `<button type="button" class="dt-lock ${locked ? "active" : ""}" data-action="encLock" data-id="${esc(g.monster.id)}" title="${locked ? "Locked: Generate keeps this group" : "Lock this group so Generate keeps it"}"><i class="fa-solid fa-${locked ? "lock" : "lock-open"}"></i></button>`
+          : "";
+        return `<li class="dt-monster">
+          ${lock}
           ${g.monster.img ? `<img src="${esc(g.monster.img)}" alt="">` : `<i class="fa-solid fa-skull"></i>`}
           <span class="dt-count">${g.count}×</span>
           ${g.monster.uuid ? `<a data-action="openDoc" data-uuid="${esc(g.monster.uuid)}">${esc(g.name)}</a>` : esc(g.name)}
           <span class="dt-sub">CR ${crLabel(g.monster.cr)}${g.role ? ` · ${g.role}` : ""} · ${(g.xpEach * g.count).toLocaleString()} XP</span>
-        </li>`)
+        </li>`;
+      })
       .join("");
+  }
+
+  #encounterPreview(e: Encounter) {
     const ratingNote = e.rating === e.difficulty ? "" : ` <em>(asked for ${e.difficulty})</em>`;
+    const allXp = encounterXp(e);
+    const allRating = rateEncounter(allXp, e.partyLevel, e.partySize);
+    const waves = (e.waves ?? [])
+      .map((w, i) => `
+        <div class="dt-wave">
+          <p class="dt-enc-head"><strong>Wave ${i + 1}</strong> · round ${w.round} · ${w.xp.toLocaleString()} XP
+            <button type="button" data-action="encWaveIn" data-index="${i}" title="Place visible tokens and add them to the current combat"><i class="fa-solid fa-person-running"></i> Bring in</button>
+            <button type="button" data-action="encWaveRemove" data-index="${i}" title="Remove this wave"><i class="fa-solid fa-xmark"></i></button>
+          </p>
+          <p class="dt-sub">${esc(w.arrival)}</p>
+          <ul class="dt-monsters">${this.#monsterRows(w.groups, false)}</ul>
+        </div>`)
+      .join("");
     return `
       <div class="dt-card">
         <p class="dt-enc-head"><strong>${esc(TEMPLATES[e.template])}</strong> · <span class="dt-rating dt-${e.rating}">${e.rating}</span>${ratingNote} · ${e.totalXp.toLocaleString()} / ${e.budget.toLocaleString()} XP</p>
-        <ul class="dt-monsters">${rows}</ul>
+        <ul class="dt-monsters">${this.#monsterRows(e.groups, true)}</ul>
+        ${this.locked.size ? `<p class="dt-hint"><i class="fa-solid fa-lock"></i> Generate keeps locked groups and rebuilds the rest.</p>` : ""}
         <ul class="dt-tactics">${e.tactics.map((t) => `<li>${esc(t)}</li>`).join("")}</ul>
         <p><strong>Situation:</strong> ${esc(e.situation)}</p>
         <p><strong>Terrain:</strong> ${esc(e.terrain)}</p>
         ${e.loot ? `<details><summary>Treasure ≈ ${e.loot.totalValueGp.toLocaleString()} gp</summary>${lootHtml(e.loot)}</details>` : ""}
         ${e.warnings.map((w) => `<p class="dt-warn">⚠ ${esc(w)}</p>`).join("")}
+        ${waves ? `${waves}<p class="dt-enc-head">With waves: <span class="dt-rating dt-${allRating}">${allRating}</span> · ${allXp.toLocaleString()} XP</p>` : ""}
       </div>
       <div class="dt-row dt-actions">
         <button type="button" data-action="encPlace" title="Place hidden tokens around the center of your view"><i class="fa-solid fa-eye-slash"></i> Place hidden</button>
         <button type="button" data-action="encCombat" title="Place visible tokens, add them to combat and roll initiative"><i class="fa-solid fa-swords"></i> Place &amp; fight</button>
+        <button type="button" data-action="encWave" title="Add reinforcements worth about half the budget"><i class="fa-solid fa-plus"></i> Add a wave</button>
         <button type="button" data-action="encChat"><i class="fa-solid fa-comment"></i> Chat (GM)</button>
         <button type="button" data-action="encJournal"><i class="fa-solid fa-book"></i> Journal</button>
       </div>`;
@@ -373,7 +409,10 @@ export class ToolkitApp extends ApplicationV2 {
       if (group === "encounter") {
         const f = this.form.encounter;
         const [catalog, magicItems] = await Promise.all([getCatalog(f.source), getMagicItems(f.source)]);
-        const e = generateEncounter({ seed, catalog, magicItems, partyLevel: f.level, partySize: f.size, difficulty: f.difficulty, template: f.template, tags: f.tags, loot: f.loot });
+        const locked = this.encounter?.groups.filter((g) => this.locked.has(g.monster.id)) ?? [];
+        const race = locked.length ? this.encounter!.race : undefined;
+        const e = generateEncounter({ seed, catalog, magicItems, partyLevel: f.level, partySize: f.size, difficulty: f.difficulty, template: f.template, tags: f.tags, loot: f.loot, locked, race });
+        this.locked = new Set(locked.map((g) => g.monster.id));
         this.encounter = await linkEncounter(e);
       } else if (group === "dungeon") {
         const f = this.form.dungeon;
@@ -460,6 +499,38 @@ export class ToolkitApp extends ApplicationV2 {
   static #onEncCombat(this: ToolkitApp, _e: Event, target: HTMLButtonElement) {
     const e = this.encounter;
     if (e) this.#run(target, () => placeEncounter(e, { hidden: false, startCombat: true }));
+  }
+
+  static #onEncLock(this: ToolkitApp, _e: Event, target: HTMLElement) {
+    const id = target.dataset.id!;
+    if (!this.locked.delete(id)) this.locked.add(id);
+    this.#readForm();
+    this.render();
+  }
+
+  static #onEncWave(this: ToolkitApp, _e: Event, target: HTMLButtonElement) {
+    const e = this.encounter;
+    if (!e) return;
+    this.#run(target, async () => {
+      const catalog = await getCatalog(this.form.encounter.source);
+      this.encounter = await linkEncounter(addWave(e, { catalog }));
+      this.#readForm();
+      this.render();
+    });
+  }
+
+  static #onEncWaveIn(this: ToolkitApp, _e: Event, target: HTMLButtonElement) {
+    const wave = this.encounter?.waves?.[Number(target.dataset.index)];
+    if (wave) this.#run(target, () => placeEncounter(wave, { hidden: false, startCombat: true }));
+  }
+
+  static #onEncWaveRemove(this: ToolkitApp, _e: Event, target: HTMLElement) {
+    const e = this.encounter;
+    if (!e?.waves) return;
+    const waves = e.waves.filter((_, i) => i !== Number(target.dataset.index));
+    this.encounter = { ...e, waves: waves.length ? waves : undefined };
+    this.#readForm();
+    this.render();
   }
 
   static #onEncChat(this: ToolkitApp) {

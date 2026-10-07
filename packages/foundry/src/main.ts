@@ -18,6 +18,10 @@ import { MODULE_ID } from "./util.ts";
  *   const catalog = await tk.getCatalog("compendium");
  *   const enc = tk.generateEncounter({ catalog, partyLevel: 5, tags: "humanoid+orc", difficulty: "high" });
  *   await tk.placeEncounter(enc, { startCombat: true });
+ *
+ *   // Reinforcements; place them when they arrive (they join the running combat):
+ *   const withWave = tk.addWave(enc, { catalog });
+ *   await tk.placeEncounter(withWave.waves[0], { startCombat: true });
  */
 const api = {
   ...core,

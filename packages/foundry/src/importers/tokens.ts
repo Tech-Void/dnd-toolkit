@@ -1,4 +1,4 @@
-import type { Encounter, MonsterEntry } from "@dnd-toolkit/core";
+import type { Encounter, EncounterGroup, MonsterEntry } from "@dnd-toolkit/core";
 import { findByName } from "../catalog.ts";
 import { ensureFolder } from "../util.ts";
 
@@ -15,9 +15,9 @@ export async function ensureWorldActor(monster: MonsterEntry): Promise<any> {
   return game.actors.importFromCompendium(game.packs.get(doc.pack), doc.id, { folder: await ensureFolder("Actor") });
 }
 
-/** Fill in UUIDs for SRD-catalog encounters so journal and chat links work. */
+/** Fill in UUIDs for SRD-catalog encounters (and their waves) so journal and chat links work. */
 export async function linkEncounter(encounter: Encounter): Promise<Encounter> {
-  for (const g of encounter.groups) {
+  for (const g of [...encounter.groups, ...(encounter.waves ?? []).flatMap((w) => w.groups)]) {
     if (!g.monster.uuid) {
       const hit = await findByName(g.monster.name);
       if (hit) g.monster = { ...g.monster, uuid: hit.uuid, img: hit.img };
@@ -42,8 +42,11 @@ function cellsAround(cx: number, cy: number, radius: number): [number, number][]
   return out.sort((a, b) => Math.hypot(a[0] - cx, a[1] - cy) - Math.hypot(b[0] - cx, b[1] - cy));
 }
 
-/** Place an encounter's tokens without overlapping each other or existing tokens. Returns the created tokens. */
-export async function placeEncounter(encounter: Encounter, opts: PlaceOptions = {}) {
+/**
+ * Place an encounter's (or a wave's) tokens without overlapping each other or existing tokens.
+ * With startCombat, they join the current combat if there is one. Returns the created tokens.
+ */
+export async function placeEncounter(encounter: { groups: readonly EncounterGroup[] }, opts: PlaceOptions = {}) {
   const scene = opts.scene ?? canvas.scene;
   if (!scene) throw new Error("No active scene to place tokens on.");
   const gs = scene.grid.size;
