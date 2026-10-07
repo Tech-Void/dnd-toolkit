@@ -1,7 +1,9 @@
-import { createRng, roomCells, roomCenter, type DungeonMap, type RoomKey } from "@dnd-toolkit/core";
-import { dungeonToBlob } from "../render.ts";
-import { ensureFolder, MODULE_ID } from "../util.ts";
+import { roomCenter, type DungeonLight, type DungeonMap, type LootPile, type RoomKey } from "@dnd-toolkit/core";
+import { dungeonToBlob, tokenCells } from "../render.ts";
+import { ambientLight, ensureFolder, isDnd5e, MODULE_ID } from "../util.ts";
+import { resolveItemData } from "./items.ts";
 import { createRoomKeyJournal } from "./journal.ts";
+import { itemPilesActive } from "./shop.ts";
 import { linkEncounter, placeEncounter } from "./tokens.ts";
 
 // v13 namespaces it; v12 declares `class FilePicker` at the top level of a classic script, which is a
@@ -31,7 +33,29 @@ export interface SceneImportOptions {
   roomKey?: RoomKey[];
   /** Place each room's encounter as hidden tokens. */
   placeMonsters?: boolean;
+  /** Light sources: painted into the background and created as AmbientLights. */
+  lights?: DungeonLight[];
+  /** Scene darkness, 0 (daylight) to 1. Default 0. */
+  darkness?: number;
+  /** Let global illumination light the scene. */
+  globalLight?: boolean;
+  /** One creature in each humanoid group carries a torch. */
+  torchBearers?: boolean;
   activate?: boolean;
+}
+
+/** A hidden Item Piles pile holding the loot, if Item Piles is active. */
+async function createLootPile(scene: any, pile: LootPile, gs: number) {
+  if (!itemPilesActive()) return;
+  const items = await Promise.all(pile.loot.items.map(resolveItemData));
+  const currency = Object.fromEntries(Object.entries(pile.loot.coins).filter(([, n]) => n > 0));
+  await game.itempiles.API.createItemPile({
+    sceneId: scene.id,
+    position: { x: pile.cell[0] * gs, y: pile.cell[1] * gs },
+    items,
+    actorOverrides: isDnd5e() && Object.keys(currency).length ? { system: { currency } } : undefined,
+    tokenOverrides: { name: "Loot", hidden: true },
+  });
 }
 
 /** Create a fully playable Scene: background image, walls, doors, vision, and room notes. */
@@ -39,13 +63,13 @@ export async function createDungeonScene(map: DungeonMap, opts: SceneImportOptio
   const gs = opts.gridSize ?? game.settings.get(MODULE_ID, "gridSize") ?? 100;
   const name = opts.name ?? `${map.style === "cave" ? "Cave" : "Dungeon"} ${map.seed}`;
 
-  const blob = await dungeonToBlob(map, { cell: gs });
+  const blob = await dungeonToBlob(map, { cell: gs, lights: opts.lights });
   const src = await uploadImage(blob, `dungeon-${map.seed.replace(/[^\w-]/g, "_")}-${Date.now()}.webp`);
 
   const walls = map.walls.map((w) => ({
     // Foundry wants whole pixels; smoothed cave walls fall between grid lines.
     c: [w.x1, w.y1, w.x2, w.y2].map((v) => Math.round(v * gs)),
-    door: w.door ? CONST.WALL_DOOR_TYPES.DOOR : CONST.WALL_DOOR_TYPES.NONE,
+    door: w.secret ? CONST.WALL_DOOR_TYPES.SECRET : w.door ? CONST.WALL_DOOR_TYPES.DOOR : CONST.WALL_DOOR_TYPES.NONE,
   }));
 
   let journal: any = null;
@@ -67,6 +91,19 @@ export async function createDungeonScene(map: DungeonMap, opts: SceneImportOptio
         iconSize: Math.round(gs * 0.5),
         fontSize: Math.round(gs * 0.3),
       });
+      // Loot piles get their own pins. The room key is GM-only, so players never see them.
+      for (const pile of key.piles ?? []) {
+        notes.push({
+          entryId: journal.id,
+          pageId: page.id,
+          x: Math.round((pile.cell[0] + 0.5) * gs),
+          y: Math.round((pile.cell[1] + 0.5) * gs),
+          text: `Loot (DC ${pile.dc})`,
+          texture: { src: "icons/svg/chest.svg", tint: "#e0b43a" },
+          iconSize: Math.round(gs * 0.4),
+          fontSize: Math.round(gs * 0.22),
+        });
+      }
     }
   }
 
@@ -81,23 +118,21 @@ export async function createDungeonScene(map: DungeonMap, opts: SceneImportOptio
     grid: { type: CONST.GRID_TYPES.SQUARE, size: gs, distance: 5, units: "ft" },
     tokenVision: true,
     fog: { exploration: true },
+    environment: { darknessLevel: opts.darkness ?? 0, globalLight: { enabled: !!opts.globalLight } },
     journal: journal?.id ?? null,
     walls,
     notes,
+    lights: (opts.lights ?? []).map((l) => ambientLight(l, gs)),
     flags: { [MODULE_ID]: { seed: map.seed, kind: "dungeon" } },
   });
 
   if (opts.placeMonsters) {
     for (const key of opts.roomKey ?? []) {
-      const room = map.rooms.find((r) => r.id === key.roomId);
-      if (!room || !key.encounter) continue;
-      // Shuffled interior cells, skipping the room's center where the map note sits.
-      const cells = roomCells(room);
-      const [cx, cy] = roomCenter(room);
-      const shuffled = createRng(`${map.seed}:tokens:${room.id}`).shuffle(cells.filter(([x, y]) => x !== cx || y !== cy));
-      await placeEncounter(key.encounter, { scene, cells: shuffled, hidden: true });
+      // Interior cells spread apart, away from the walls, the map note and any loot pile (same as the preview).
+      if (key.encounter) await placeEncounter(key.encounter, { scene, cells: tokenCells(map, key), hidden: true, torchBearers: opts.torchBearers });
     }
   }
+  for (const key of opts.roomKey ?? []) for (const pile of key.piles ?? []) await createLootPile(scene, pile, gs);
 
   if (opts.activate) await scene.activate();
   else await scene.view();

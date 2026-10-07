@@ -54,7 +54,9 @@ function roomHtml(key: RoomKey): string {
   let html = `<p>${esc(key.description)}</p>`;
   if (key.encounter) html += `<h3>Encounter — ${esc(TEMPLATES[key.encounter.template])}</h3>${encounterHtml(key.encounter, { heading: false })}`;
   if (key.trap) html += `<p><strong>Trap:</strong> ${esc(key.trap)}</p>`;
-  if (key.loot) html += `<h3>Treasure</h3>${lootHtml(key.loot)}`;
+  if (key.piles?.length) {
+    html += key.piles.map((p) => `<h3>Loot pile</h3><p>${esc(p.note)} <em>DC ${p.dc} Wisdom (Perception) or Intelligence (Investigation) to find.</em></p>${lootHtml(p.loot)}`).join("");
+  } else if (key.loot) html += `<h3>Treasure</h3>${lootHtml(key.loot)}`;
   return html;
 }
 

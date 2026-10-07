@@ -117,3 +117,26 @@
 .dnd-toolkit .dt-npc { margin: 0.3rem 0; padding-left: 1.1rem; }
 .dnd-toolkit .dt-npc li { margin: 0.15rem 0; }
 .dnd-toolkit .dt-npc .dt-gm { opacity: 0.8; font-style: italic; }
+.dnd-toolkit .dt-checks { display: flex; flex-wrap: wrap; gap: 0.2rem 1rem; margin-top: 0.3rem; }
+.dnd-toolkit .dt-legend { font-size: var(--font-size-11, 11px); opacity: 0.85; margin: 0; }
+.dnd-toolkit .dt-key { display: inline-block; width: 10px; height: 10px; margin: 0 0.15rem 0 0.5rem; vertical-align: -1px; }
+.dnd-toolkit .dt-key-foe { background: #d6332a; border-radius: 50%; border: 1px solid #fff; }
+.dnd-toolkit .dt-key-loot { background: #e0b43a; border: 1px solid #4a3410; }
+.dnd-toolkit .dt-key-secret { border: 2px dashed #b04dff; }
+.dnd-toolkit .dt-rooms ul { margin: 0.3rem 0; padding-left: 1.1rem; font-size: var(--font-size-12, 12px); }
+.dnd-toolkit .dt-rooms .dt-hidden-room { color: #8a4fd0; }
+.dnd-toolkit .dt-tabs button { font-size: var(--font-size-12, 12px); }
+.dnd-toolkit .dt-forged ul { margin: 0.3rem 0; padding-left: 1.1rem; }
+.dnd-toolkit .dt-forged + .dt-forged { margin-top: 0.4rem; }
+.dnd-toolkit .dt-rarity { font-size: var(--font-size-11, 11px); padding: 0 0.35rem; border-radius: 3px; color: #fff; text-transform: capitalize; }
+.dnd-toolkit .dt-r-common { background: #6b6b6b; }
+.dnd-toolkit .dt-r-uncommon { background: #2e7d32; }
+.dnd-toolkit .dt-r-rare { background: #1f5fae; }
+.dnd-toolkit .dt-r-very-rare { background: #7b3fb5; }
+.dnd-toolkit .dt-r-legendary { background: #c16a12; }
+.dnd-toolkit textarea[name=text] { width: 100%; min-height: 9rem; font-family: var(--font-mono, monospace); font-size: var(--font-size-12, 12px); resize: vertical; }
+.dnd-toolkit .dt-parsed + .dt-parsed { margin-top: 0.4rem; }
+.dnd-toolkit .dt-kind { flex: 0 0 auto; align-self: center; text-transform: capitalize; font-size: var(--font-size-11, 11px); padding: 0.1rem 0.4rem; border-radius: 3px; background: rgba(0, 0, 0, 0.15); }
+.dnd-toolkit .dt-facts { display: grid; grid-template-columns: max-content 1fr; gap: 0.1rem 0.6rem; margin: 0.4rem 0; font-size: var(--font-size-12, 12px); }
+.dnd-toolkit .dt-facts dt { font-weight: bold; }
+.dnd-toolkit .dt-facts dd { margin: 0; }

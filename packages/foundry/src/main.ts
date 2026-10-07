@@ -2,6 +2,8 @@ import * as core from "@dnd-toolkit/core";
 import { detectParty, ToolkitApp, type Tab } from "./app.ts";
 import { createBattlemapScene } from "./importers/battlemap.ts";
 import { createNpcActor, npcHtml, placeNpcToken } from "./importers/npc.ts";
+import { createForgedItem, forgedItemData, giveForgedItems } from "./importers/forge.ts";
+import { addParsedToActor, createParsedItems, parsedItemData } from "./importers/parsed.ts";
 import { getCatalog, getMagicItems, reanalyzeMonsters, resetCatalog } from "./catalog.ts";
 import { createDungeonScene } from "./importers/scene.ts";
 import { createJournal, createRoomKeyJournal, encounterHtml, hookHtml, lootHtml, postToChat } from "./importers/journal.ts";
@@ -47,6 +49,14 @@ const api = {
   createBattlemapScene,
   /** const actor = await tk.createNpcActor(tk.generateNpc({ role: "guard" })); await tk.placeNpcToken(actor); */
   createNpcActor,
+  /** await tk.giveForgedItems(tk.forgeItems(3, { kind: "weapon", rarity: "rare" }), actor) */
+  createForgedItem,
+  forgedItemData,
+  giveForgedItems,
+  /** await tk.addParsedToActor(tk.parseText(pastedStatblockActions), actor) */
+  createParsedItems,
+  addParsedToActor,
+  parsedItemData,
   placeNpcToken,
   npcHtml,
   createRoomKeyJournal,

@@ -10,3 +10,7 @@ export * from "./cave.ts";
 export * from "./outline.ts";
 export * from "./battlemap.ts";
 export * from "./npc.ts";
+export * from "./hidden.ts";
+export * from "./lighting.ts";
+export * from "./forge.ts";
+export * from "./parse.ts";

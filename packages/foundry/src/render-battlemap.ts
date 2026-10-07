@@ -1,4 +1,5 @@
-import { createRng, type Battlemap, type Ground, type Prop, type Rng } from "@dnd-toolkit/core";
+import { ROCK_STYLE, stoneTexture } from "./texture.ts";
+import { createRng, floorOutlines, smoothLoop, type Battlemap, type Ground, type Point, type Prop, type Rng } from "@dnd-toolkit/core";
 
 export interface BattlemapRenderOptions {
   /** Pixels per grid cell. */
@@ -144,29 +145,101 @@ function groundDetail(ctx: Ctx, rng: Rng, g: Ground, px: number, py: number, c: 
   }
 }
 
+/** Path through a list of closed loops, in grid units. */
+function loopsPath(loops: Point[][], c: number, offset = 0): Path2D {
+  const path = new Path2D();
+  for (const loop of loops) {
+    loop.forEach(([x, y], i) => {
+      if (i) path.lineTo((x + offset) * c, (y + offset) * c);
+      else path.moveTo((x + offset) * c, (y + offset) * c);
+    });
+    path.closePath();
+  }
+  return path;
+}
+
+/** Smooth outline of every patch of one ground type. Padded a cell past the map edge so the border isn't rounded off. */
+function groundPath(m: Battlemap, layer: Ground, c: number): Path2D | null {
+  const at = (x: number, y: number) => m.ground[Math.max(0, Math.min(m.height - 1, y))]![Math.max(0, Math.min(m.width - 1, x))];
+  const mask = Array.from({ length: m.height + 2 }, (_, y) => Array.from({ length: m.width + 2 }, (_, x) => (at(x - 1, y - 1) === layer ? 1 : 0)));
+  const loops = floorOutlines(mask).map((loop) => smoothLoop(loop, 3));
+  return loops.length ? loopsPath(loops, c, -1) : null;
+}
+
+/** Edge treatment per ground type: [color, width in cells]. Water gets a bank, the rest a soft rim. */
+const RIMS: Partial<Record<Ground, [string, number][]>> = {
+  water: [["rgba(52, 40, 24, 0.55)", 0.16], ["rgba(190, 225, 245, 0.35)", 0.05]],
+  road: [["rgba(70, 50, 30, 0.18)", 0.1]],
+  dirt: [["rgba(80, 60, 35, 0.15)", 0.08]],
+};
+
 function drawGround(ctx: Ctx, rng: Rng, m: Battlemap, c: number) {
+  const counts = new Map<Ground, number>();
+  for (const row of m.ground) for (const g of row) counts.set(g, (counts.get(g) ?? 0) + 1);
+  // The most common ground is the backdrop; everything else is painted over it as smooth patches.
+  const base = [...counts].sort((a, b) => b[1] - a[1])[0]![0];
+  if (m.setting === "cave") ctx.drawImage(stoneTexture(m.width, m.height, `${m.seed}:rock`, ROCK_STYLE), 0, 0, m.width * c, m.height * c);
+  else {
+    ctx.fillStyle = GROUND[base];
+    ctx.fillRect(0, 0, m.width * c, m.height * c);
+  }
+
   for (const layer of LAYERS) {
+    if (!counts.has(layer) && !(layer === "cave" && m.outlines)) continue;
+    // Cave rock is the textured backdrop already.
+    if (layer === "rock" && m.setting === "cave") continue;
     const color = GROUND[layer];
-    for (let y = 0; y < m.height; y++) {
-      for (let x = 0; x < m.width; x++) {
-        if (m.ground[y]![x] !== layer) continue;
-        const px = x * c;
-        const py = y * c;
-        if (ORGANIC.has(layer) || layer === "rock") {
-          const tone = shade(color, (rng.next() - 0.5) * 0.1);
-          rect(ctx, px, py, c, c, tone);
-          // Spill a little into neighbors for soft, rounded edges.
-          circle(ctx, px + c / 2 + (rng.next() - 0.5) * c * 0.2, py + c / 2 + (rng.next() - 0.5) * c * 0.2, c * 0.68, tone);
+    if (!ORGANIC.has(layer) && layer !== "rock") {
+      // Built floors stay crisp: planks and flagstones square to the grid.
+      for (let y = 0; y < m.height; y++) {
+        for (let x = 0; x < m.width; x++) {
+          if (m.ground[y]![x] !== layer) continue;
+          rect(ctx, x * c, y * c, c, c, color);
+          groundDetail(ctx, rng, layer, x * c, y * c, c);
         }
       }
+      continue;
     }
+    // A cave's floor follows the same outline as its walls (pools are painted on top).
+    const path = layer === "cave" && m.outlines ? loopsPath(m.outlines, c) : groundPath(m, layer, c);
+    if (!path) continue;
+    ctx.fillStyle = color;
+    ctx.fill(path, "evenodd");
+    ctx.save();
+    ctx.clip(path, "evenodd");
     for (let y = 0; y < m.height; y++) {
       for (let x = 0; x < m.width; x++) {
-        if (m.ground[y]![x] !== layer) continue;
-        if (!ORGANIC.has(layer) && layer !== "rock") rect(ctx, x * c, y * c, c, c, color);
+        const here = m.ground[y]![x];
+        if (here !== layer && !(layer === "cave" && here === "water")) continue;
+        // Soft mottling, then tufts, pebbles or ripples.
+        circle(ctx, (x + rng.next()) * c, (y + rng.next()) * c, c * (0.45 + rng.next() * 0.3), shade(color, (rng.next() - 0.5) * 0.1));
         groundDetail(ctx, rng, layer, x * c, y * c, c);
       }
     }
+    ctx.restore();
+    for (const [rim, width] of RIMS[layer] ?? []) {
+      ctx.strokeStyle = rim;
+      ctx.lineWidth = c * width;
+      ctx.lineJoin = "round";
+      ctx.stroke(path);
+    }
+  }
+
+  if (m.outlines) {
+    // Cave walls: shadow just inside the rock face, then a crisp edge.
+    const floor = loopsPath(m.outlines, c);
+    ctx.save();
+    ctx.clip(floor, "evenodd");
+    ctx.lineJoin = "round";
+    for (const [width, alpha] of [[0.6, 0.14], [0.3, 0.2]] as const) {
+      ctx.strokeStyle = `rgba(0, 0, 0, ${alpha})`;
+      ctx.lineWidth = c * width;
+      ctx.stroke(floor);
+    }
+    ctx.restore();
+    ctx.strokeStyle = "#110e0b";
+    ctx.lineWidth = c * 0.1;
+    ctx.stroke(floor);
   }
 }
 

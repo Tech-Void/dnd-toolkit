@@ -33,7 +33,12 @@ export interface PlaceOptions {
   hidden?: boolean;
   /** Add the tokens to the combat tracker and roll NPC initiative. */
   startCombat?: boolean;
+  /** One creature in each humanoid group carries a torch (a light on its token). */
+  torchBearers?: boolean;
 }
+
+/** Token light for a torch-bearer. */
+export const TORCH_LIGHT = { bright: 20, dim: 40, color: "#ff9329", alpha: 0.4, animation: { type: "torch", speed: 3, intensity: 3 } };
 
 /** Cells sorted by distance from a center cell. */
 function cellsAround(cx: number, cy: number, radius: number): [number, number][] {
@@ -96,11 +101,14 @@ export async function placeEncounter(encounter: { groups: readonly EncounterGrou
     for (let i = 0; i < g.count; i++) {
       // Fall back to 1×1 (overlapping the room edge is better than not placing it).
       const cell = claim(size) ?? claim(1) ?? candidates[0]!;
+      // Humanoids bring their own light; beasts and the dead are happy in the dark.
+      const torch = opts.torchBearers && i === 0 && g.monster.type === "humanoid";
       const td = await actor.getTokenDocument({
         x: sceneX + cell[0] * gs,
         y: sceneY + cell[1] * gs,
         hidden: !!opts.hidden,
         name: g.name,
+        ...(torch ? { light: TORCH_LIGHT } : {}),
       });
       tokens.push(td.toObject());
     }

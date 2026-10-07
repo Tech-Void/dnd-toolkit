@@ -59,6 +59,9 @@ describe("generateBattlemap", () => {
       }
       const cave = generateBattlemap({ setting: "cave", seed: `c${i}` });
       expect(cave.darkness).toBe(1);
+      // Rounded rock faces: the walls follow the smoothed outline, off the grid lines.
+      expect(cave.outlines!.length).toBeGreaterThan(0);
+      expect(cave.walls.some((w) => !Number.isInteger(w.x1))).toBe(true);
       expect(cave.lights.length).toBeGreaterThan(0);
     }
   });

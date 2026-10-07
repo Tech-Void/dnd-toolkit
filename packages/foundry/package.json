@@ -8,6 +8,7 @@
     "dev": "vite build --watch"
   },
   "dependencies": {
-    "@dnd-toolkit/core": "*"
+    "@dnd-toolkit/core": "*",
+    "simplex-noise": "^4.0.3"
   }
 }

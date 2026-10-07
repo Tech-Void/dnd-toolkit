@@ -1,4 +1,5 @@
 import { createRng, type Rng } from "./rng.ts";
+import { forgeItem, type ForgedItem } from "./forge.ts";
 import { ART, ARMOR_BASES, GEMS, MAGIC_ITEMS, RARITY_VALUE_GP, WEAPON_BASES, type Rarity } from "./data/treasure.ts";
 
 export type LootMode = "individual" | "hoard";
@@ -21,6 +22,8 @@ export interface LootItem {
   rarity?: Rarity;
   /** Foundry UUID when the item came from a compendium pool. */
   uuid?: string;
+  /** A one-of-a-kind item from the Forge. */
+  forged?: ForgedItem;
 }
 
 /** A magic item available for treasure, e.g. from the user's item compendiums. */
@@ -54,6 +57,8 @@ export interface LootOptions {
   mode?: LootMode;
   /** Draw magic items from this pool instead of the built-in list (per rarity, when non-empty). */
   magicItems?: MagicItemPool;
+  /** Forge unique magic items instead of picking standard ones. */
+  forge?: boolean;
   seed?: string | number;
 }
 
@@ -160,7 +165,10 @@ export function generateLoot(opts: LootOptions): LootResult {
     for (let i = 0; i < count; i++) {
       const rarity = rng.weighted(magic.rarity);
       const pool = opts.magicItems?.[rarity];
-      if (pool?.length) {
+      if (opts.forge) {
+        const forged = forgeItem({ rarity, seed: `${rng.seed}:forge:${i}` });
+        addItem(items, { name: forged.name, kind: "magic", quantity: 1, valueGp: forged.valueGp, rarity, forged });
+      } else if (pool?.length) {
         const ref = pickFromPool(rng, pool);
         addItem(items, { name: ref.name, kind: "magic", quantity: 1, valueGp: ref.valueGp || RARITY_VALUE_GP[rarity], rarity, uuid: ref.uuid });
       } else {

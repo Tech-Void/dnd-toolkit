@@ -1,5 +1,6 @@
 import type { LootItem, LootResult, Rarity } from "@dnd-toolkit/core";
 import { esc, isDnd5e, MODULE_ID } from "../util.ts";
+import { forgedItemData } from "./forge.ts";
 
 const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
 
@@ -32,8 +33,16 @@ async function compendiumIndex() {
   return index;
 }
 
+/** A compendium item by name (system packs win ties), e.g. "Longsword" for a forged blade. */
+export async function compendiumItem(name: string): Promise<any> {
+  const hit = (await compendiumIndex()).get(normalize(name));
+  return hit ? hit.pack.getDocument(hit.id) : null;
+}
+
 /** Build item creation data: the real compendium item when one matches, else a generic loot item. */
 export async function resolveItemData(item: LootItem): Promise<object> {
+  // One-of-a-kind items from the Forge build themselves.
+  if (item.forged) return forgedItemData(item.forged);
   const hit = item.uuid ? null : (await compendiumIndex()).get(normalize(item.name));
   const doc = item.uuid ? await fromUuid(item.uuid) : hit ? await hit.pack.getDocument(hit.id) : null;
   if (doc) {

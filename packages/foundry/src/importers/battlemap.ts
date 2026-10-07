@@ -1,6 +1,6 @@
 import type { Battlemap, Encounter, Prop } from "@dnd-toolkit/core";
 import { battlemapToBlob } from "../render-battlemap.ts";
-import { ensureFolder, esc, MODULE_ID } from "../util.ts";
+import { ambientLight, ensureFolder, esc, MODULE_ID } from "../util.ts";
 import { createJournal } from "./journal.ts";
 import { uploadImage } from "./scene.ts";
 import { linkEncounter, placeEncounter } from "./tokens.ts";
@@ -61,17 +61,7 @@ export async function createBattlemapScene(m: Battlemap, opts: BattlemapSceneOpt
     for (const c of propWalls(p, gs)) walls.push({ c, move: MOVE, sight: sees, light: sees, sound: NONE });
   }
 
-  const lights = m.lights.map((l) => ({
-    x: Math.round(l.x * gs),
-    y: Math.round(l.y * gs),
-    config: {
-      bright: l.bright,
-      dim: l.dim,
-      color: l.color,
-      alpha: 0.35,
-      animation: l.animation ? { type: l.animation === "fire" ? "flame" : l.animation, speed: 3, intensity: 3 } : {},
-    },
-  }));
+  const lights = m.lights.map((l) => ambientLight(l, gs));
 
   const journal = m.notes.length
     ? await createJournal(`${name} — Battlefield`, battlemapNotesHtml(m), { kind: "battlemap", seed: m.seed })

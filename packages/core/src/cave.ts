@@ -1,16 +1,26 @@
-import { createRng, type Rng } from "./rng.ts";
+import { createRng, valueNoise, type Rng } from "./rng.ts";
 import { FLOOR, ROCK, type DungeonMap, type Room } from "./dungeon.ts";
 import { floorOutlines, loopWalls, smoothLoop } from "./outline.ts";
 
 export interface CaveOptions {
   width?: number;
   height?: number;
-  /** Starting fraction of rock, about 0.4 (open) to 0.52 (tight). */
+  /** Starting fraction of rock, about 0.4 (open) to 0.52 (tight). Overrides `openness`. */
   density?: number;
+  /**
+   * tight: twisting tunnels and small chambers. open: big caverns. mixed (default): both, varying
+   * across the map, so there are wide halls in one part and narrow passages in another.
+   */
+  openness?: CaveOpenness;
   /** Number of chambers to divide the cave into. Default scales with cave size. */
   chambers?: number;
   seed?: string | number;
 }
+
+export type CaveOpenness = "tight" | "mixed" | "open";
+
+/** Base rock density and how much it swings across the map. */
+const OPENNESS: Record<CaveOpenness, [base: number, swing: number]> = { tight: [0.5, 0.08], mixed: [0.47, 0.22], open: [0.43, 0.1] };
 
 const N4: [number, number][] = [[1, 0], [-1, 0], [0, 1], [0, -1]];
 
@@ -29,9 +39,9 @@ function rockAround(cells: number[][], x: number, y: number, radius: number): nu
  * Cellular automaton: random noise smoothed into caverns. Rock persists with 4+ rock neighbors and
  * open ground fills in with 5+, which settles into chambers joined by narrow passages.
  */
-function automaton(rng: Rng, w: number, h: number, density: number): number[][] {
+function automaton(rng: Rng, w: number, h: number, density: (x: number, y: number) => number): number[][] {
   const edge = (x: number, y: number) => x === 0 || y === 0 || x === w - 1 || y === h - 1;
-  let cells = Array.from({ length: h }, (_, y) => Array.from({ length: w }, (_, x) => (edge(x, y) || rng.chance(density) ? ROCK : FLOOR)));
+  let cells = Array.from({ length: h }, (_, y) => Array.from({ length: w }, (_, x) => (edge(x, y) || rng.chance(density(x, y)) ? ROCK : FLOOR)));
   for (let step = 0; step < 5; step++) {
     cells = cells.map((row, y) =>
       row.map((cell, x) => {
@@ -180,24 +190,43 @@ function chambers(rng: Rng, cells: number[][], count: number): Room[] {
     seeds.push(best);
   }
 
-  // Assign every floor cell to its nearest seed.
+  // Each chamber grows at its own pace, so some become great halls and others small pockets:
+  // a cell joins the seed with the smallest walking distance divided by that seed's weight.
+  const weights = seeds.map(() => 0.55 + rng.next() * 1.2);
+  const dists = seeds.map((s) => bfs(cells, [s]));
   const owner = cells.map((row) => row.map(() => -1));
+  for (const [x, y] of floor) {
+    let best = -1;
+    let bestScore = Infinity;
+    dists.forEach((d, i) => {
+      const score = d[y]![x]! / weights[i]!;
+      if (score < bestScore) [best, bestScore] = [i, score];
+    });
+    owner[y]![x] = best;
+  }
+  // Weighted regions can come out in pieces; keep the piece holding each seed and hand the
+  // strays to whichever chamber reaches them first.
+  const kept = cells.map((row) => row.map(() => -1));
   const queue: [number, number][] = [];
   seeds.forEach(([x, y], i) => {
-    owner[y]![x] = i;
+    kept[y]![x] = i;
     queue.push([x, y]);
   });
-  for (let i = 0; i < queue.length; i++) {
-    const [x, y] = queue[i]!;
-    for (const [dx, dy] of N4) {
-      const nx = x + dx;
-      const ny = y + dy;
-      if (cells[ny]?.[nx] === FLOOR && owner[ny]![nx] === -1) {
-        owner[ny]![nx] = owner[y]![x]!;
+  for (const sameOwnerOnly of [true, false]) {
+    for (let i = 0; i < queue.length; i++) {
+      const [x, y] = queue[i]!;
+      const mine = kept[y]![x]!;
+      for (const [dx, dy] of N4) {
+        const nx = x + dx;
+        const ny = y + dy;
+        if (cells[ny]?.[nx] !== FLOOR || kept[ny]![nx] !== -1) continue;
+        if (sameOwnerOnly && owner[ny]![nx] !== mine) continue;
+        kept[ny]![nx] = mine;
         queue.push([nx, ny]);
       }
     }
   }
+  owner.forEach((row, y) => row.forEach((_, x) => (row[x] = kept[y]![x]!)));
 
   const groups: [number, number][][] = seeds.map(() => []);
   for (const [x, y] of floor) if (owner[y]![x]! >= 0) groups[owner[y]![x]!]!.push([x, y]);
@@ -222,14 +251,17 @@ export function generateCave(opts: CaveOptions = {}): DungeonMap {
   const rng = createRng(opts.seed);
 
   // Retry until the main cavern is big enough to be worth playing (rare with sane densities).
+  const [base, swing] = OPENNESS[opts.openness ?? "mixed"];
   let cells: number[][] = [];
   for (let attempt = 0; attempt < 8; attempt++) {
-    cells = automaton(rng, width, height, opts.density ?? 0.48);
+    // Rock density drifts across the map: open caverns in one region, tight tunnels in another.
+    const drift = valueNoise(rng, width, height, 12);
+    cells = automaton(rng, width, height, (x, y) => opts.density ?? base + (drift[y]![x]! - 0.5) * swing * 2);
     if (connectRegions(rng, cells, 12) >= width * height * 0.3) break;
   }
 
   const floorCount = cells.flat().filter((c) => c === FLOOR).length;
-  const count = opts.chambers ?? Math.max(4, Math.min(14, Math.round(floorCount / 70)));
+  const count = opts.chambers ?? Math.max(4, Math.min(16, Math.round(floorCount / rng.int(55, 85))));
   const rooms = chambers(rng, cells, count);
   // Rounded rock faces instead of stair-stepped cell edges; the walls follow the same curves.
   const outlines = floorOutlines(cells).map((loop) => smoothLoop(loop, 2));

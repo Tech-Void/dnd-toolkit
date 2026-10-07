@@ -29,6 +29,8 @@ export interface Room {
   cells?: [number, number][];
   /** Where the room's label and map note go. Absent = box center. */
   center?: [number, number];
+  /** Behind a secret door. */
+  hidden?: boolean;
 }
 
 export const roomCenter = (r: Room): [number, number] => r.center ?? [Math.floor(r.x + r.w / 2), Math.floor(r.y + r.h / 2)];
@@ -51,6 +53,8 @@ export interface WallSegment {
   x2: number;
   y2: number;
   door: boolean;
+  /** A secret door: looks like wall until found. */
+  secret?: boolean;
 }
 
 export interface DungeonMap {
@@ -247,6 +251,19 @@ export interface RoomKey {
   encounter?: Encounter;
   trap?: string;
   loot?: LootResult;
+  /** Behind a secret door. */
+  hidden?: boolean;
+  /** Treasure lying somewhere in the room, for the players to find. */
+  piles?: LootPile[];
+}
+
+export interface LootPile {
+  cell: [number, number];
+  /** Where it is and how it's hidden, for the GM. */
+  note: string;
+  /** DC to notice it (Wisdom (Perception) or Intelligence (Investigation)). */
+  dc: number;
+  loot: LootResult;
 }
 
 const ROOM_FEATURES = [
@@ -293,6 +310,23 @@ const TRAPS = [
   "Rune of sleep (DC 13 Wis save or unconscious 1 minute)",
 ];
 
+export type MonsterDensity = "few" | "some" | "many";
+/** Share of ordinary rooms (not the entrance or lair) that get an encounter. */
+const DENSITY: Record<MonsterDensity, number> = { few: 0.25, some: 0.45, many: 0.65 };
+
+const PILE_SPOTS = {
+  dungeon: [
+    "under a loose flagstone", "in a rotted backpack beside a skeleton", "behind a loose brick in the wall",
+    "wrapped in oilcloth beneath a collapsed shelf", "inside a cracked funerary urn", "in a false bottom of an empty crate",
+    "sewn into the lining of a moldering cloak", "in a small iron box under the rubble",
+  ],
+  cave: [
+    "tucked into a crevice", "buried under loose scree", "in a waterlogged pack wedged between rocks",
+    "in a hollow beneath a stalagmite", "inside the ribcage of something long dead", "in a nest of old bones and rags",
+    "under a flat stone someone clearly moved", "in a leather sack hanging in the dark above a ledge",
+  ],
+};
+
 export interface StockOptions {
   partyLevel: number;
   partySize?: number;
@@ -300,36 +334,118 @@ export interface StockOptions {
   tags?: string;
   catalog?: readonly MonsterEntry[];
   magicItems?: MagicItemPool;
+  /** How many rooms hold monsters. Default "some". */
+  monsters?: MonsterDensity;
+  /** Put treasure in findable piles (GM notes with a DC) instead of only listing it. */
+  lootPiles?: boolean;
+  /** Hoards hold unique forged magic items instead of standard ones. */
+  uniqueItems?: boolean;
   seed?: string | number;
+}
+
+/** The lair is the largest room that isn't the entrance. */
+export const lairRoom = (map: DungeonMap): Room | undefined =>
+  map.rooms.slice(1).reduce<Room | undefined>((big, r) => (!big || roomArea(r) > roomArea(big) ? r : big), undefined);
+
+/** Pick up to `count` rooms, keeping them apart so encounters don't pile up next to each other. */
+function spreadOut(rng: Rng, rooms: Room[], count: number, avoid: Room[], minGap: number): Set<Room> {
+  const picked = new Set<Room>();
+  const far = (r: Room, gap: number) => [...picked, ...avoid].every((o) => dist(o, r) >= gap);
+  for (const gap of [minGap, minGap * 0.6, 0]) {
+    for (const r of rng.shuffle(rooms)) {
+      if (picked.size >= count) return picked;
+      if (!picked.has(r) && far(r, gap)) picked.add(r);
+    }
+  }
+  return picked;
+}
+
+const isRock = (map: DungeonMap, x: number, y: number) => map.cells[y]?.[x] !== FLOOR;
+const rockNear = (map: DungeonMap, x: number, y: number) => {
+  let n = 0;
+  for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if ((dx || dy) && isRock(map, x + dx, y + dy)) n++;
+  return n;
+};
+
+/**
+ * Cells for a room's tokens, best first: away from the walls (no half-in-the-rock tokens) and spread
+ * out so the first picks aren't shoulder to shoulder. Skips the room's label spot and `skip` cells.
+ */
+export function placementCells(map: DungeonMap, room: Room, seed: string | number, skip: [number, number][] = []): [number, number][] {
+  const rng = createRng(seed);
+  const [cx, cy] = roomCenter(room);
+  const blocked = new Set([`${cx},${cy}`, ...skip.map(([x, y]) => `${x},${y}`)]);
+  const cells = rng.shuffle(roomCells(room).filter(([x, y]) => !blocked.has(`${x},${y}`)));
+  const inner = cells.filter(([x, y]) => rockNear(map, x, y) === 0);
+  const edge = cells.filter(([x, y]) => rockNear(map, x, y) > 0);
+  // First a pass that leaves a gap between picks, then everything else.
+  const spaced: [number, number][] = [];
+  for (const c of inner) if (spaced.every(([x, y]) => Math.max(Math.abs(x - c[0]), Math.abs(y - c[1])) > 1)) spaced.push(c);
+  const rest = inner.filter((c) => !spaced.includes(c));
+  return [...spaced, ...rest, ...edge];
+}
+
+/** A cell along the room's walls, where things get stashed. */
+function stashCell(rng: Rng, map: DungeonMap, room: Room): [number, number] {
+  const [cx, cy] = roomCenter(room);
+  const cells = roomCells(room).filter(([x, y]) => x !== cx || y !== cy);
+  const snug = cells.filter(([x, y]) => rockNear(map, x, y) >= 3);
+  return rng.pick(snug.length ? snug : cells.length ? cells : [[cx, cy]]);
 }
 
 export function stockDungeon(map: DungeonMap, opts: StockOptions): RoomKey[] {
   const rng = createRng(opts.seed ?? `${map.seed}:stock`);
   const base = { partyLevel: opts.partyLevel, partySize: opts.partySize ?? 4, tags: opts.tags, catalog: opts.catalog, magicItems: opts.magicItems };
-  // The lair is the largest room that isn't the entrance.
-  const bossRoom = map.rooms.slice(1).reduce<Room | undefined>((big, r) => (!big || roomArea(r) > roomArea(big) ? r : big), undefined);
+  const lair = lairRoom(map);
+  const style = map.style === "cave" ? "cave" : "dungeon";
+  const noun = style === "cave" ? "Chamber" : "Room";
   // Don't pack more creatures into a room than it can comfortably hold.
-  const capFor = (r: Room) => Math.max(1, Math.min(base.partySize * 2, Math.floor(roomArea(r) / 3)));
+  const capFor = (r: Room) => Math.max(1, Math.min(base.partySize * 2, Math.floor(roomArea(r) / 6)));
+
+  // Encounter rooms, spread across the map. Hidden rooms are mostly quiet; the entrance always is.
+  const ordinary = map.rooms.filter((r) => r.id !== 1 && r !== lair && !r.hidden);
+  const gap = Math.sqrt((map.width * map.height) / Math.max(1, map.rooms.length)) * 0.9;
+  const fights = spreadOut(rng, ordinary, Math.round(ordinary.length * DENSITY[opts.monsters ?? "some"]), lair ? [lair] : [], gap);
+
+  const pile = (room: Room, loot: LootResult): LootPile => ({
+    cell: stashCell(rng, map, room),
+    note: `${loot.mode === "hoard" ? "The hoard is" : "A small cache is"} ${rng.pick(PILE_SPOTS[style])}.`,
+    dc: rng.int(10, 15),
+    loot,
+  });
 
   return map.rooms.map((room) => {
-    const noun = map.style === "cave" ? "Chamber" : "Room";
-    const key: RoomKey = { roomId: room.id, title: `${noun} ${room.id}`, description: rng.pick(map.style === "cave" ? CAVE_FEATURES : ROOM_FEATURES) };
+    const key: RoomKey = { roomId: room.id, title: `${noun} ${room.id}`, description: rng.pick(style === "cave" ? CAVE_FEATURES : ROOM_FEATURES) };
     const seed = `${rng.seed}:${room.id}`;
     if (room.id === 1) {
       key.title = `${noun} 1 — Entrance`;
       return key;
     }
-    if (room === bossRoom) {
+    if (room === lair) {
       key.title = `${noun} ${room.id} — Lair`;
       key.encounter = generateEncounter({ ...base, difficulty: "high", template: rng.pick(["leader", "solo", "elite"] as const), maxCreatures: capFor(room), seed });
-      key.loot = generateLoot({ cr: Math.max(...key.encounter.groups.map((g) => g.monster.cr), opts.partyLevel), mode: "hoard", magicItems: opts.magicItems, seed });
+      key.loot = generateLoot({ cr: Math.max(...key.encounter.groups.map((g) => g.monster.cr), opts.partyLevel), mode: "hoard", magicItems: opts.magicItems, forge: opts.uniqueItems, seed });
+      if (opts.lootPiles) key.piles = [pile(room, key.loot)];
       return key;
     }
-    if (rng.chance(0.45)) {
+    if (room.hidden) {
+      key.title = `${noun} ${room.id} — Hidden`;
+      key.hidden = true;
+      key.description = `Behind a secret door (DC ${rng.int(13, 16)} Wisdom (Perception) or Intelligence (Investigation) to find). ${key.description}`;
+      key.loot = generateLoot({ cr: opts.partyLevel, mode: "hoard", magicItems: opts.magicItems, forge: opts.uniqueItems, seed: `${seed}:hidden` });
+      if (opts.lootPiles) key.piles = [pile(room, key.loot)];
+      if (rng.chance(0.3)) key.encounter = generateEncounter({ ...base, difficulty: "moderate", maxCreatures: capFor(room), seed });
+      return key;
+    }
+    if (fights.has(room)) {
       const difficulty = rng.weighted([["low", 2], ["moderate", 3], ["high", 1]] as const);
-      key.encounter = generateEncounter({ ...base, difficulty, maxCreatures: capFor(room), loot: rng.chance(0.6), seed });
+      key.encounter = generateEncounter({ ...base, difficulty, maxCreatures: capFor(room), loot: !opts.lootPiles && rng.chance(0.6), seed });
     }
     if (rng.chance(0.2)) key.trap = rng.pick(TRAPS);
+    // Scattered caches: about one room in four, more often where something lives.
+    if (opts.lootPiles && rng.chance(key.encounter ? 0.45 : 0.2)) {
+      key.piles = [pile(room, generateLoot({ cr: opts.partyLevel, mode: "individual", magicItems: opts.magicItems, seed: `${seed}:pile` }))];
+    }
     return key;
   });
 }

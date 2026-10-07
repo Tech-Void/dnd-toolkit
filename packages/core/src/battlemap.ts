@@ -1,5 +1,6 @@
-import { createRng, type Rng } from "./rng.ts";
+import { createRng, valueNoise as noise, type Rng } from "./rng.ts";
 import type { WallSegment } from "./dungeon.ts";
+import { floorOutlines, loopWalls, smoothLoop, type Point } from "./outline.ts";
 
 // ---------------------------------------------------------------------------
 // Small, single-fight battlemaps: a clearing, a shop floor, a cave grotto...
@@ -77,6 +78,8 @@ export interface Battlemap {
   zones: { party: Cell[]; enemies: Cell[] };
   /** GM notes on the terrain: cover, difficult ground, hazards. */
   notes: string[];
+  /** Smoothed outline of the open floor (caves); the walls follow it. */
+  outlines?: Point[][];
 }
 
 export interface BattlemapOptions {
@@ -238,27 +241,6 @@ const grid = <T>(w: number, h: number, v: T): T[][] => Array.from({ length: h },
 function edgeKey(a: Cell, b: Cell): string {
   const [x, y] = [Math.max(a[0], b[0]), Math.max(a[1], b[1])];
   return a[0] === b[0] ? `h:${x},${y}` : `v:${x},${y}`;
-}
-
-/** Smooth random field in [0, 1): bilinear value noise on a coarse lattice. */
-function noise(rng: Rng, w: number, h: number, scale: number): number[][] {
-  const lw = Math.ceil(w / scale) + 2;
-  const lh = Math.ceil(h / scale) + 2;
-  const lattice = Array.from({ length: lh }, () => Array.from({ length: lw }, () => rng.next()));
-  const smooth = (t: number) => t * t * (3 - 2 * t);
-  return Array.from({ length: h }, (_, y) =>
-    Array.from({ length: w }, (_, x) => {
-      const gx = x / scale;
-      const gy = y / scale;
-      const x0 = Math.floor(gx);
-      const y0 = Math.floor(gy);
-      const tx = smooth(gx - x0);
-      const ty = smooth(gy - y0);
-      const at = (i: number, j: number) => lattice[j]![i]!;
-      const top = at(x0, y0) * (1 - tx) + at(x0 + 1, y0) * tx;
-      const bottom = at(x0, y0 + 1) * (1 - tx) + at(x0 + 1, y0 + 1) * tx;
-      return top * (1 - ty) + bottom * ty;
-    }));
 }
 
 const edgeDist = (b: Builder, x: number, y: number) => Math.min(x, y, b.w - 1 - x, b.h - 1 - y);
@@ -711,6 +693,7 @@ function transpose(m: Battlemap): Battlemap {
     walls: m.walls.map((w) => ({ ...w, x1: w.y1, y1: w.x1, x2: w.y2, y2: w.x2 })),
     props: m.props.map((p) => ({ ...sw(p), w: p.h, h: p.w })),
     lights: m.lights.map(sw),
+    outlines: m.outlines?.map((loop) => loop.map(([x, y]): Point => [y, x])),
     zones: { party: m.zones.party.map(([x, y]): Cell => [y, x]), enemies: m.zones.enemies.map(([x, y]): Cell => [y, x]) },
   };
 }
@@ -747,6 +730,8 @@ export function generateBattlemap(opts: BattlemapOptions = {}): Battlemap {
     else enemyArea = camp(b);
 
     const edges = wallEdges(b);
+    // Caves get rounded rock faces instead of stair-stepped cell edges.
+    const caveOutlines = setting === "cave" ? floorOutlines(b.region.map((row) => row.map((r) => (r >= 0 ? 1 : 0)))).map((l) => smoothLoop(l, 2)) : [];
     const blocking = new Set([...edges].filter(([, k]) => k !== "door").map(([key]) => key));
 
     // The party comes in from the street, the road's start or the left edge (the cave's left end).
@@ -779,7 +764,8 @@ export function generateBattlemap(opts: BattlemapOptions = {}): Battlemap {
       width: w,
       height: h,
       ground: b.ground,
-      walls: segments(edges),
+      walls: setting === "cave" ? loopWalls(caveOutlines) : segments(edges),
+      outlines: setting === "cave" ? caveOutlines : undefined,
       props: [...b.props.filter((p) => UNDERLAY.has(p.kind)), ...b.props.filter((p) => !UNDERLAY.has(p.kind))],
       lights: b.lights,
       darkness: setting === "cave" ? 1 : night ? (outdoor ? 0.75 : 0.6) : 0,
@@ -802,7 +788,8 @@ function cellsWhere(b: Builder, test: (x: number, y: number) => boolean): Cell[]
 function movementBlockers(m: Battlemap): { edges: Set<string>; cells: Set<string> } {
   const edges = new Set<string>();
   for (const w of m.walls) {
-    if (w.door) continue;
+    // Curved cave walls run through rock cells, which already block movement.
+    if (w.door || ![w.x1, w.y1, w.x2, w.y2].every(Number.isInteger) || (w.x1 !== w.x2 && w.y1 !== w.y2)) continue;
     if (w.y1 === w.y2) for (let x = Math.min(w.x1, w.x2); x < Math.max(w.x1, w.x2); x++) edges.add(`h:${x},${w.y1}`);
     else for (let y = Math.min(w.y1, w.y2); y < Math.max(w.y1, w.y2); y++) edges.add(`v:${w.x1},${y}`);
   }

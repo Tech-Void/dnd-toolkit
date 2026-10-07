@@ -1,3 +1,5 @@
+import type { BattleLight } from "@dnd-toolkit/core";
+
 export const MODULE_ID = "dnd-toolkit";
 export const FOLDER_NAME = "DnD Toolkit";
 
@@ -13,3 +15,18 @@ export async function ensureFolder(type: "Scene" | "JournalEntry" | "Item" | "Ac
 }
 
 export const isDnd5e = () => game.system.id === "dnd5e";
+
+/** AmbientLight data for a generated light (grid units → pixels). */
+export function ambientLight(l: BattleLight, gs: number) {
+  return {
+    x: Math.round(l.x * gs),
+    y: Math.round(l.y * gs),
+    config: {
+      bright: l.bright,
+      dim: l.dim,
+      color: l.color,
+      alpha: 0.35,
+      animation: l.animation ? { type: l.animation === "fire" ? "flame" : l.animation, speed: 3, intensity: 3 } : {},
+    },
+  };
+}

@@ -92,3 +92,24 @@ export function createRng(seed: string | number = randomSeed()): Rng {
   };
   return rng;
 }
+
+/** Smooth random field in [0, 1): bilinear value noise on a coarse lattice. */
+export function valueNoise(rng: Rng, w: number, h: number, scale: number): number[][] {
+  const lw = Math.ceil(w / scale) + 2;
+  const lh = Math.ceil(h / scale) + 2;
+  const lattice = Array.from({ length: lh }, () => Array.from({ length: lw }, () => rng.next()));
+  const smooth = (t: number) => t * t * (3 - 2 * t);
+  return Array.from({ length: h }, (_, y) =>
+    Array.from({ length: w }, (_, x) => {
+      const gx = x / scale;
+      const gy = y / scale;
+      const x0 = Math.floor(gx);
+      const y0 = Math.floor(gy);
+      const tx = smooth(gx - x0);
+      const ty = smooth(gy - y0);
+      const at = (i: number, j: number) => lattice[j]![i]!;
+      const top = at(x0, y0) * (1 - tx) + at(x0 + 1, y0) * tx;
+      const bottom = at(x0, y0 + 1) * (1 - tx) + at(x0 + 1, y0 + 1) * tx;
+      return top * (1 - ty) + bottom * ty;
+    }));
+}
