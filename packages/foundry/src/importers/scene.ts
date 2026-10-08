@@ -1,6 +1,9 @@
 import { lockPin, roomCenter, type DungeonLight, type DungeonMap, type LootPile, type RoomKey, type WallSegment } from "@dnd-toolkit/core";
 import { lockedDoorData, trapRegionData } from "../interactive.ts";
 import { dungeonToBlob, tokenCells } from "../render.ts";
+import { dungeonArt } from "../fa-assets.ts";
+import { dungeonEffects, effectTiles } from "../effects.ts";
+import { puzzleDoorFlag, puzzleSceneData } from "../puzzles.ts";
 import { ambientLight, ensureFolder, isDnd5e, MODULE_ID } from "../util.ts";
 import { resolveItemData } from "./items.ts";
 import { createRoomKeyJournal } from "./journal.ts";
@@ -67,7 +70,7 @@ export async function createDungeonScene(map: DungeonMap, opts: SceneImportOptio
   const gs = opts.gridSize ?? game.settings.get(MODULE_ID, "gridSize") ?? 100;
   const name = opts.name ?? `${map.style === "cave" ? "Cave" : "Dungeon"} ${map.seed}`;
 
-  const blob = await dungeonToBlob(map, { cell: gs, lights: opts.lights });
+  const blob = await dungeonToBlob(map, { cell: gs, lights: opts.lights, art: await dungeonArt(map, opts.roomKey ?? []), keys: opts.roomKey });
   const src = await uploadImage(blob, `dungeon-${map.seed.replace(/[^\w-]/g, "_")}-${Date.now()}.webp`);
 
   const walls = map.walls.map((w) => ({
@@ -76,7 +79,11 @@ export async function createDungeonScene(map: DungeonMap, opts: SceneImportOptio
     door: w.secret ? CONST.WALL_DOOR_TYPES.SECRET : w.door ? CONST.WALL_DOOR_TYPES.DOOR : CONST.WALL_DOOR_TYPES.NONE,
     // Locked, stuck and barred doors start LOCKED; players clicking one get to pick, force or unlock it.
     ...(w.lock ? lockedDoorData(w.lock) : {}),
-  }));
+  })).map((data, i) => {
+    // The door a puzzle opens remembers which puzzle.
+    const pid = puzzleDoorFlag(map, map.walls[i]!);
+    return pid ? { ...data, flags: { [MODULE_ID]: { ...((data as any).flags?.[MODULE_ID] ?? {}), puzzleDoor: pid } } } : data;
+  });
 
   let journal: any = null;
   const notes: object[] = [];
@@ -143,6 +150,7 @@ export async function createDungeonScene(map: DungeonMap, opts: SceneImportOptio
     journal: journal?.id ?? null,
     walls,
     notes,
+    tiles: await effectTiles(dungeonEffects(map, opts.roomKey ?? [], opts.lights ?? []), gs, map.seed),
     lights: (opts.lights ?? []).map((l) => ambientLight(l, gs)),
     flags: { [MODULE_ID]: { seed: map.seed, kind: "dungeon" } },
   });
@@ -150,12 +158,17 @@ export async function createDungeonScene(map: DungeonMap, opts: SceneImportOptio
   if (opts.placeMonsters) {
     for (const key of opts.roomKey ?? []) {
       // Interior cells spread apart, away from the walls, the map note and any loot pile (same as the preview).
-      if (key.encounter) await placeEncounter(key.encounter, { scene, cells: tokenCells(map, key), hidden: true, torchBearers: opts.torchBearers });
+      if (key.encounter) await placeEncounter(key.encounter, { scene, cells: tokenCells(map, key), hidden: true, torchBearers: opts.torchBearers, lair: /Lair/.test(key.title) });
     }
   }
   for (const key of opts.roomKey ?? []) for (const pile of key.piles ?? []) await createLootPile(scene, pile, gs);
   // Traps: trigger squares that stop and pause, and a ring where sharp eyes spot them first.
-  const regions = (opts.roomKey ?? []).flatMap((k) => (k.trapData && k.trapCells?.length ? trapRegionData(k.trapData, k.trapCells, gs, `room-${k.roomId}`) : []));
+  const regions: object[] = (opts.roomKey ?? []).flatMap((k) => (k.trapData && k.trapCells?.length ? trapRegionData(k.trapData, k.trapCells, gs, `room-${k.roomId}`) : []));
+  // Puzzles: a tile and a region for every lever, plate, statue and rune.
+  const pz = await puzzleSceneData(map, gs);
+  regions.push(...pz.regions);
+  if (pz.tiles.length) await scene.createEmbeddedDocuments("Tile", pz.tiles);
+  if (Object.keys(pz.flags).length) await scene.setFlag(MODULE_ID, "puzzles", pz.flags);
   if (regions.length) await scene.createEmbeddedDocuments("Region", regions);
 
   if (opts.activate) await scene.activate();

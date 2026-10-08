@@ -7,11 +7,13 @@ import {
   roomCenter,
   type DungeonLight,
   type DungeonMap,
+  type Furnishing,
   type Rng,
   type RoomKey,
   type WallSegment,
 } from "@dnd-toolkit/core";
 import { CAVE_FLOOR_STYLE, ROCK_STYLE, stoneTexture } from "./texture.ts";
+import type { DungeonArt } from "./fa-assets.ts";
 
 export interface RenderOptions {
   /** Pixels per grid cell. */
@@ -20,6 +22,10 @@ export interface RenderOptions {
   labels?: boolean;
   /** Light sources to paint into the scene (sconces, braziers, glowing fungi...). */
   lights?: DungeonLight[];
+  /** Forgotten Adventures textures and clutter; without it the map keeps its painted look. */
+  art?: DungeonArt | null;
+  /** The room key, so clutter stays clear of doors, traps and loot (and the lair gets its bones). */
+  keys?: RoomKey[];
 }
 
 const PALETTES = {
@@ -144,6 +150,117 @@ function drawLight(ctx: CanvasRenderingContext2D, rng: Rng, l: DungeonLight, c: 
   }
 }
 
+const FACING = { n: 0, e: Math.PI / 2, s: Math.PI, w: -Math.PI / 2 } as const;
+const FURNITURE_COLOR: Partial<Record<Furnishing["kind"], string>> = {
+  bed: "#7a5a3a", bedroll: "#6b5a44", table: "#8a6338", bench: "#7a5530", barrel: "#6d4a2a", crate: "#9a7a4a", chest: "#5a3a1e", altar: "#8d8a83",
+  coffin: "#4a3424", sarcophagus: "#9b968c", bookcase: "#4e3420", shelf: "#6b4a2a", rug: "#7a2f2a", pillar: "#a19c92", bones: "#e2dccb", skeleton: "#e2dccb",
+  forge: "#5a2a1a", anvil: "#3c3c40", mineCart: "#55504a", support: "#6d5030", cauldron: "#2e2e30", cage: "#4a4a4e", pew: "#6b4a2a", desk: "#6b4426",
+};
+
+/**
+ * Room furniture: FA art fitted to each footprint and turned to put its back to the wall, or a
+ * plain painted shape without the art.
+ */
+function drawFurniture(ctx: CanvasRenderingContext2D, c: number, keys: RoomKey[], art?: DungeonArt | null) {
+  const rng = createRng(keys.map((k) => k.roomId).join(":") + ":furniture");
+  // Rugs first, then everything else.
+  const all = keys.flatMap((k) => k.furniture ?? []).sort((a, b) => Number(b.kind === "rug") - Number(a.kind === "rug"));
+  for (const f of all) {
+    const pool = art?.furniture[f.kind];
+    const cx = (f.x + f.w / 2) * c;
+    const cy = (f.y + f.h / 2) * c;
+    ctx.save();
+    ctx.translate(cx, cy);
+    if (pool?.length) {
+      // Prefer art the same size as the footprint (either way round).
+      const exact = pool.filter((a) => (a.w === f.w && a.h === f.h) || (a.w === f.h && a.h === f.w));
+      const a = rng.pick(exact.length ? exact : pool);
+      let angle: number = FACING[f.facing];
+      // After turning, the art's long side must run the same way as the footprint's.
+      const quarter = Math.abs(Math.round(angle / (Math.PI / 2))) % 2 === 1;
+      const [rw, rh] = quarter ? [a.h, a.w] : [a.w, a.h];
+      if (f.w !== f.h && (f.w > f.h) !== (rw > rh)) angle += Math.PI / 2;
+      const turned = Math.abs(Math.round(angle / (Math.PI / 2))) % 2 === 1;
+      const [fw, fh] = turned ? [f.h, f.w] : [f.w, f.h];
+      const k = Math.min(fw / a.w, fh / a.h);
+      ctx.rotate(angle);
+      ctx.drawImage(a.img, (-a.w * k * c) / 2, (-a.h * k * c) / 2, a.w * k * c, a.h * k * c);
+    } else {
+      ctx.fillStyle = FURNITURE_COLOR[f.kind] ?? "#7a6a55";
+      ctx.strokeStyle = "rgba(20, 14, 8, 0.8)";
+      ctx.lineWidth = Math.max(1, c / 30);
+      const inset = f.kind === "rug" ? 0.05 : 0.15;
+      ctx.fillRect((-f.w / 2 + inset) * c, (-f.h / 2 + inset) * c, (f.w - inset * 2) * c, (f.h - inset * 2) * c);
+      ctx.strokeRect((-f.w / 2 + inset) * c, (-f.h / 2 + inset) * c, (f.w - inset * 2) * c, (f.h - inset * 2) * c);
+    }
+    ctx.restore();
+  }
+}
+
+/** Torches on their brackets, braziers and candles, on top of the painted glow. */
+function drawLightArt(ctx: CanvasRenderingContext2D, l: DungeonLight, c: number, art: DungeonArt) {
+  const pick = (pool: { img: HTMLImageElement }[]) => pool[Math.abs(Math.round(l.x * 7 + l.y * 13)) % pool.length]!;
+  if (l.kind === "torch" && art.torches.length) {
+    // Torches sit 0.42 of a square from their cell's center toward the wall; the bracket is the art's right edge.
+    const dx = l.x - (Math.floor(l.x) + 0.5);
+    const dy = l.y - (Math.floor(l.y) + 0.5);
+    ctx.save();
+    ctx.translate((Math.floor(l.x) + 0.5) * c, (Math.floor(l.y) + 0.5) * c);
+    ctx.rotate(Math.atan2(dy, dx));
+    ctx.drawImage(pick(art.torches).img, -c / 2, -c / 2, c, c);
+    ctx.restore();
+  } else if (l.kind === "brazier" && art.braziers.length) {
+    ctx.drawImage(pick(art.braziers).img, (l.x - 0.5) * c, (l.y - 0.5) * c, c, c);
+  } else if (l.kind === "candles" && art.candles.length) {
+    for (const [ox, oy] of [[-0.22, -0.1], [0.18, -0.2], [0.05, 0.2]]) ctx.drawImage(pick(art.candles).img, (l.x + ox! - 0.35) * c, (l.y + oy! - 0.35) * c, c * 0.7, c * 0.7);
+  }
+}
+
+/** A repeating fill for an art texture at its true size in squares. */
+function artPattern(ctx: CanvasRenderingContext2D, t: { img: HTMLImageElement; w: number }, c: number): CanvasPattern | string {
+  const p = ctx.createPattern(t.img, "repeat");
+  p?.setTransform(new DOMMatrix().scale((c * t.w) / t.img.width));
+  return p ?? "#555";
+}
+
+/**
+ * Leave things lying along the walls: crates, sacks, rubble, mushrooms in caves, bones in the
+ * lair. Never on doorways, trap triggers or loot piles (that would give them away).
+ */
+function drawClutter(ctx: CanvasRenderingContext2D, map: DungeonMap, c: number, art: DungeonArt, keys: RoomKey[]) {
+  const rng = createRng(`${map.seed}:clutter`);
+  const floor = (x: number, y: number) => map.cells[y]?.[x] === FLOOR;
+  const keep = new Set<string>();
+  for (const k of keys) {
+    for (const f of k.furniture ?? []) for (let y = f.y; y < f.y + f.h; y++) for (let x = f.x; x < f.x + f.w; x++) keep.add(`${x},${y}`);
+    for (const [x, y] of k.trapCells ?? []) keep.add(`${x},${y}`);
+    for (const p of k.piles ?? []) keep.add(`${p.cell[0]},${p.cell[1]}`);
+  }
+  for (const w of map.walls) {
+    if (!w.door) continue;
+    const cells = w.y1 === w.y2 ? [[w.x1, w.y1 - 1], [w.x1, w.y1]] : [[w.x1 - 1, w.y1], [w.x1, w.y1]];
+    for (const [x, y] of cells) keep.add(`${x},${y}`);
+  }
+  const lair = keys.find((k) => /Lair/.test(k.title))?.roomId;
+  for (const room of map.rooms) {
+    const [cx, cy] = roomCenter(room);
+    const spots = roomCells(room).filter(([x, y]) => (x !== cx || y !== cy) && !keep.has(`${x},${y}`)
+      && [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dy]) => !floor(x + dx!, y + dy!)));
+    const pool = room.id === lair && art.remains.length ? [...art.remains, ...art.clutter] : art.clutter;
+    if (!pool.length) continue;
+    const count = Math.min(spots.length, Math.round(roomCells(room).length / 10 * (0.5 + rng.next())));
+    for (const [x, y] of rng.shuffle(spots).slice(0, count)) {
+      const a = rng.pick(pool);
+      ctx.save();
+      ctx.translate((x + 0.5) * c, (y + 0.5) * c);
+      ctx.rotate(rng.int(0, 3) * (Math.PI / 2) + (rng.next() - 0.5) * 0.4);
+      const k = a.w > 1 || a.h > 1 ? 1 : 0.85;
+      ctx.drawImage(a.img, (-a.w * c * k) / 2, (-a.h * c * k) / 2, a.w * c * k, a.h * c * k);
+      ctx.restore();
+    }
+  }
+}
+
 export function drawDungeon(canvas: HTMLCanvasElement, map: DungeonMap, o: RenderOptions): void {
   const c = o.cell;
   const P = PALETTES[map.style ?? "dungeon"];
@@ -157,8 +274,15 @@ export function drawDungeon(canvas: HTMLCanvasElement, map: DungeonMap, o: Rende
   const W = canvas.width;
   const H = canvas.height;
 
-  // Rock: noise-textured stone, darkening toward the walls so the floor sits in a pit of shadow.
-  ctx.drawImage(stoneTexture(map.width, map.height, `${map.seed}:rock`, ROCK_STYLE), 0, 0, W, H);
+  // Rock: textured stone, darkening toward the walls so the floor sits in a pit of shadow.
+  const art = o.art;
+  if (art?.rock) {
+    ctx.fillStyle = artPattern(ctx, art.rock, c);
+    ctx.fillRect(0, 0, W, H);
+    // Solid rock reads darker than the floor.
+    ctx.fillStyle = "rgba(10, 8, 6, 0.55)";
+    ctx.fillRect(0, 0, W, H);
+  } else ctx.drawImage(stoneTexture(map.width, map.height, `${map.seed}:rock`, ROCK_STYLE), 0, 0, W, H);
   const outside = new Path2D();
   outside.rect(0, 0, W, H);
   outside.addPath(floor);
@@ -175,7 +299,10 @@ export function drawDungeon(canvas: HTMLCanvasElement, map: DungeonMap, o: Rende
   // Floor.
   ctx.save();
   ctx.clip(floor, "evenodd");
-  if (cave) {
+  if (art?.floor) {
+    ctx.fillStyle = artPattern(ctx, art.floor, c);
+    ctx.fillRect(0, 0, W, H);
+  } else if (cave) {
     ctx.drawImage(stoneTexture(map.width, map.height, `${map.seed}:floor`, CAVE_FLOOR_STYLE), 0, 0, W, H);
     for (let y = 0; y < map.height; y++) {
       for (let x = 0; x < map.width; x++) {
@@ -200,7 +327,9 @@ export function drawDungeon(canvas: HTMLCanvasElement, map: DungeonMap, o: Rende
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = "source-over";
   }
-  if (P.grid) {
+  drawFurniture(ctx, c, o.keys ?? [], art);
+  if (art) drawClutter(ctx, map, c, art, o.keys ?? []);
+  if (P.grid && !art?.floor) {
     ctx.strokeStyle = P.grid;
     ctx.lineWidth = Math.max(1, c / 60);
     ctx.beginPath();
@@ -221,7 +350,10 @@ export function drawDungeon(canvas: HTMLCanvasElement, map: DungeonMap, o: Rende
     ctx.lineWidth = c * width;
     ctx.stroke(floor);
   }
-  for (const l of o.lights ?? []) drawLight(ctx, rng, l, c);
+  for (const l of o.lights ?? []) {
+    drawLight(ctx, rng, l, c);
+    if (art) drawLightArt(ctx, l, c, art);
+  }
   ctx.restore();
 
   // Crisp walls.
@@ -245,6 +377,16 @@ export function drawDungeon(canvas: HTMLCanvasElement, map: DungeonMap, o: Rende
       ctx.lineTo(w.x2 * c, w.y2 * c);
       ctx.stroke();
       ctx.setLineDash([]);
+      continue;
+    }
+    if (art?.doors.length) {
+      // FA doors run across the middle of their square: center one on the doorway.
+      const a = art.doors[Math.abs(w.x1 * 31 + w.y1 * 17) % art.doors.length]!;
+      ctx.save();
+      ctx.translate(horizontal ? x1 + c / 2 : x1, horizontal ? y1 : y1 + c / 2);
+      if (!horizontal) ctx.rotate(Math.PI / 2);
+      ctx.drawImage(a.img, -c / 2, -c / 2, c, c);
+      ctx.restore();
       continue;
     }
     // A plank door between two posts.
@@ -336,6 +478,23 @@ export function drawInteractiveMarks(ctx: CanvasRenderingContext2D, traps: reado
 export function drawDungeonOverlay(canvas: HTMLCanvasElement, map: DungeonMap, keys: RoomKey[], c: number) {
   const ctx = canvas.getContext("2d")!;
   drawInteractiveMarks(ctx, keys.flatMap((k) => (k.trapCells ? [k.trapCells] : [])), map.walls, c);
+  // Puzzle pieces: violet diamonds.
+  for (const p of map.puzzles ?? []) {
+    for (const el of p.elements) {
+      const [x, y] = el.cell;
+      ctx.fillStyle = "#9b6cff";
+      ctx.strokeStyle = "#2a1650";
+      ctx.lineWidth = Math.max(1, c * 0.06);
+      ctx.beginPath();
+      ctx.moveTo((x + 0.5) * c, (y + 0.15) * c);
+      ctx.lineTo((x + 0.85) * c, (y + 0.5) * c);
+      ctx.lineTo((x + 0.5) * c, (y + 0.85) * c);
+      ctx.lineTo((x + 0.15) * c, (y + 0.5) * c);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+    }
+  }
   for (const key of keys) {
     const room = map.rooms.find((r) => r.id === key.roomId);
     if (!room) continue;

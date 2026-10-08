@@ -219,3 +219,212 @@
 .dt-threat-low .dt-threat-bar > div, .dt-threat-trivial .dt-threat-bar > div { background: #2e9e4f; }
 .dt-threat-moderate .dt-threat-bar > div { background: #d4a017; }
 .dt-combat-card button { margin-top: 0.3rem; }
+
+/* ---------------------------------------------------------------------------
+   Camp: the shared window */
+.dt-camp .window-content { padding: 0; }
+.dt-camp-shell { display: flex; flex-direction: column; height: 100%; }
+.dt-camp-head { padding: 0.6rem 0.9rem 0.4rem; background: linear-gradient(180deg, rgba(60, 35, 15, 0.55), rgba(60, 35, 15, 0.15)); border-bottom: 1px solid rgba(200, 140, 60, 0.35); }
+.dt-camp-title { font-size: 1.1em; }
+.dt-camp-title i { color: #e8964a; }
+.dt-camp-weather { font-size: 0.85em; opacity: 0.8; margin-top: 0.15rem; }
+.dt-camp-steps { display: flex; align-items: center; gap: 0.35rem; margin-top: 0.45rem; flex-wrap: wrap; font-size: 0.85em; }
+.dt-camp-step { padding: 0.15rem 0.55rem; border-radius: 999px; background: rgba(255, 255, 255, 0.06); opacity: 0.6; }
+.dt-camp-step.done { opacity: 0.85; }
+.dt-camp-step.active { background: #c46a2b; color: #fff; opacity: 1; box-shadow: 0 0 8px rgba(232, 150, 74, 0.6); }
+.dt-camp-sep { font-size: 0.7em; opacity: 0.4; }
+.dt-camp-body { flex: 1; overflow-y: auto; padding: 0.6rem 0.9rem; }
+.dt-camp-gm { display: flex; align-items: center; gap: 0.4rem; padding: 0.45rem 0.9rem; border-top: 1px solid rgba(200, 140, 60, 0.35); background: rgba(0, 0, 0, 0.15); }
+.dt-camp-gm button { flex: 0 0 auto; width: auto; }
+.dt-camp-gm-label { font-size: 0.8em; opacity: 0.7; margin-right: auto; }
+.dt-camp-cancel { opacity: 0.7; }
+.dt-camp-h { margin: 0.9rem 0 0.4rem; font-size: 1em; border-bottom: 1px solid rgba(200, 140, 60, 0.3); }
+.dt-camp-h small { font-weight: normal; opacity: 0.6; }
+.dt-camp-hint { font-style: italic; opacity: 0.85; }
+.dt-camp-hintbox { padding: 0.5rem 0.7rem; border-left: 3px solid #4fa3d1; background: rgba(79, 163, 209, 0.12); border-radius: 4px; margin-bottom: 0.6rem; }
+.dt-camp-warn { margin-top: 0.6rem; padding: 0.4rem 0.7rem; border-left: 3px solid #d9a03b; background: rgba(217, 160, 59, 0.12); border-radius: 4px; }
+.dt-camp-warn p { margin: 0.2rem 0; }
+.dt-muted { opacity: 0.6; font-size: 0.9em; }
+
+/* Portrait chips: drag them onto jobs and watches. */
+.dt-chip { display: inline-flex; align-items: center; gap: 0.3rem; padding: 2px 8px 2px 2px; border-radius: 999px; background: rgba(255, 255, 255, 0.1); border: 1px solid rgba(255, 255, 255, 0.15); cursor: default; user-select: none; }
+.dt-chip[draggable="true"] { cursor: grab; }
+.dt-chip img { width: 30px; height: 30px; border-radius: 50%; border: none; object-fit: cover; object-position: top; }
+.dt-chip.small img { width: 22px; height: 22px; }
+.dt-chip.small { font-size: 0.8em; }
+.dt-chip.held { outline: 2px solid #e8964a; box-shadow: 0 0 8px rgba(232, 150, 74, 0.8); }
+.dt-drop-hover { outline: 2px dashed #e8964a !important; background: rgba(232, 150, 74, 0.15) !important; }
+
+/* Sites */
+.dt-site-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0.6rem; }
+.dt-site { display: flex; flex-direction: column; padding: 0.6rem 0.7rem; border-radius: 6px; background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.12); }
+.dt-site.leading { border-color: #e8964a; box-shadow: 0 0 10px rgba(232, 150, 74, 0.35); }
+.dt-site h3 { margin: 0 0 0.3rem; border: none; }
+.dt-site-text { font-style: italic; opacity: 0.85; margin: 0 0 0.4rem; }
+.dt-site-tags { display: flex; flex-wrap: wrap; gap: 0.25rem; margin-bottom: 0.3rem; }
+.dt-tag { font-size: 0.78em; padding: 1px 7px; border-radius: 999px; background: rgba(255, 255, 255, 0.1); }
+.dt-tag.good { background: rgba(76, 175, 110, 0.25); }
+.dt-perk { color: #6fcf8f; margin: 0.2rem 0; font-size: 0.9em; }
+.dt-risk { color: #e57a6a; margin: 0.2rem 0; font-size: 0.9em; }
+.dt-voters { display: flex; flex-wrap: wrap; gap: 0.2rem; min-height: 28px; margin: 0.3rem 0; }
+.dt-site-buttons { display: flex; gap: 0.3rem; margin-top: auto; }
+
+/* Setup: fire, food, jobs */
+.dt-camp-bar { display: flex; align-items: center; gap: 0.6rem; }
+.dt-fire { width: auto; flex: 0 0 auto; }
+.dt-fire.lit { background: linear-gradient(180deg, #e8964a, #b4521d); color: #fff; border-color: #ffb36b; box-shadow: 0 0 12px rgba(255, 140, 50, 0.7); }
+.dt-fire.lit i { animation: dt-flicker 1.4s infinite alternate; }
+@keyframes dt-flicker { from { opacity: 1; transform: scale(1); } to { opacity: 0.7; transform: scale(1.12) rotate(-4deg); } }
+.dt-camp-food { margin-top: 0.4rem; padding: 0.35rem 0.6rem; border-radius: 4px; background: rgba(255, 255, 255, 0.05); }
+.dt-camp-food.short { background: rgba(229, 122, 106, 0.18); }
+.dt-job-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 0.45rem; }
+.dt-job { padding: 0.45rem 0.5rem; border-radius: 6px; background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.12); cursor: pointer; transition: transform 0.1s, border-color 0.1s; min-height: 92px; display: flex; flex-direction: column; }
+.dt-job:hover { transform: translateY(-1px); border-color: rgba(232, 150, 74, 0.7); }
+.dt-job.disabled { opacity: 0.4; cursor: not-allowed; }
+.dt-job-head i { color: #e8964a; width: 1.1em; }
+.dt-job-roll { font-size: 0.78em; opacity: 0.75; margin: 0.1rem 0; }
+.dt-job-blurb { font-size: 0.78em; opacity: 0.7; margin: 0.15rem 0; flex: 1; }
+.dt-job-who { display: flex; flex-wrap: wrap; gap: 0.15rem; }
+.dt-camper-rows { display: flex; flex-direction: column; gap: 0.3rem; }
+.dt-camper-row { display: grid; grid-template-columns: 140px 1fr 1fr 1.6fr; gap: 0.5rem; align-items: center; padding: 0.3rem 0.4rem; border-radius: 5px; background: rgba(255, 255, 255, 0.04); }
+.dt-camper-row a { cursor: pointer; opacity: 0.7; }
+.dt-result { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.85em; }
+.dt-result.ok { background: rgba(76, 175, 110, 0.25); }
+.dt-result.bad { background: rgba(229, 122, 106, 0.25); }
+.dt-roll-btn { width: auto; }
+
+/* Watches and the night */
+.dt-watch-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 0.45rem; }
+.dt-watch { padding: 0.45rem; border-radius: 6px; background: linear-gradient(180deg, rgba(20, 30, 60, 0.45), rgba(10, 15, 30, 0.35)); border: 1px solid rgba(120, 140, 200, 0.25); min-height: 90px; cursor: pointer; }
+.dt-watch.revealed { border-color: rgba(160, 180, 255, 0.45); }
+.dt-watch.current { box-shadow: 0 0 12px rgba(140, 170, 255, 0.5); border-color: #9fb4ff; }
+.dt-watch-label { font-size: 0.8em; font-weight: bold; opacity: 0.85; margin-bottom: 0.3rem; }
+.dt-watch-who { display: flex; flex-wrap: wrap; gap: 0.2rem; }
+.dt-watch-flavor { font-size: 0.85em; opacity: 0.8; margin: 0.35rem 0 0; }
+.dt-night-event { margin-top: 0.45rem; padding: 0.4rem; border-radius: 5px; background: rgba(0, 0, 0, 0.25); border-left: 3px solid #9fb4ff; cursor: default; }
+.dt-night-event.encounter { border-left-color: #e5534b; }
+.dt-night-event.weather { border-left-color: #4fa3d1; }
+.dt-night-event.omen { border-left-color: #b37ff0; }
+.dt-night-event p { margin: 0.15rem 0; }
+.dt-event-rolls { display: flex; flex-wrap: wrap; gap: 0.25rem; margin: 0.25rem 0; }
+.dt-event-rolls button, .dt-event-gm button { width: auto; flex: 0 0 auto; font-size: 0.8em; line-height: 1.6; }
+.dt-outcome { font-style: italic; }
+.dt-outcome.ok { color: #6fcf8f; }
+.dt-outcome.bad { color: #e57a6a; }
+.dt-event-gm { display: flex; flex-wrap: wrap; gap: 0.25rem; }
+
+/* Morning */
+.dt-night-recap { margin: 0.3rem 0 0.6rem; }
+.dt-morning-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 0.5rem; }
+.dt-morning-camper { padding: 0.5rem; border-radius: 6px; background: linear-gradient(180deg, rgba(255, 200, 120, 0.12), rgba(255, 255, 255, 0.03)); border: 1px solid rgba(255, 200, 120, 0.25); }
+.dt-morning-camper ul { list-style: none; padding: 0; margin: 0.4rem 0 0; }
+.dt-morning-camper li { margin: 0.2rem 0; font-size: 0.9em; }
+.dt-morning-camper li i { color: #e8b04a; width: 1.2em; }
+.dt-bar { position: relative; height: 6px; background: rgba(255, 255, 255, 0.12); border-radius: 3px; margin-top: 3px; display: flex; overflow: hidden; }
+.dt-bar > div:first-child { background: #6fa8dc; }
+.dt-bar-gain { background: #f0d060; animation: dt-pulse 1.2s infinite alternate; }
+@keyframes dt-pulse { from { opacity: 0.6; } to { opacity: 1; } }
+.dt-rest-pick { display: flex; flex-wrap: wrap; gap: 1rem; margin-top: 0.6rem; padding: 0.5rem; border-radius: 5px; background: rgba(0, 0, 0, 0.15); }
+.dt-morning-card h3, .dt-done-card p { margin: 0.2rem 0; }
+.dt-done-card { border-left: 3px solid #f0d060; padding-left: 0.5rem; }
+
+/* ---------------------------------------------------------------------------
+   Projects & downtime */
+.dt-projects .window-content { padding: 0.5rem 0.8rem; }
+.dt-proj-top { display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem; padding-bottom: 0.4rem; border-bottom: 1px solid rgba(255, 255, 255, 0.12); }
+.dt-day { font-weight: bold; }
+.dt-day-shift a { margin: 0 0.15rem; cursor: pointer; opacity: 0.7; }
+.dt-grant { display: inline-flex; gap: 0.3rem; align-items: center; }
+.dt-grant input { width: 3.5em; }
+.dt-grant button { width: auto; }
+.dt-pending { color: #f0d060; }
+.dt-proj-tabs { display: flex; flex-wrap: wrap; gap: 0.3rem; margin: 0.5rem 0; }
+.dt-proj-tabs button { width: auto; flex: 0 0 auto; display: inline-flex; align-items: center; gap: 0.35rem; }
+.dt-proj-tabs button img { width: 22px; height: 22px; border-radius: 50%; border: none; object-fit: cover; object-position: top; }
+.dt-proj-tabs button.active { border-color: #e8964a; box-shadow: 0 0 6px rgba(232, 150, 74, 0.5); }
+.dt-dot { background: #e5534b; color: #fff; border-radius: 999px; padding: 0 6px; font-size: 0.75em; }
+.dt-bonuses { margin: 0.3rem 0 0.6rem; }
+.dt-project { padding: 0.55rem 0.65rem; margin-bottom: 0.5rem; border-radius: 6px; background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.12); }
+.dt-project.status-check { border-color: #f0d060; box-shadow: 0 0 8px rgba(240, 208, 96, 0.3); }
+.dt-project.status-proposed { border-style: dashed; }
+.dt-project.status-done { opacity: 0.85; }
+.dt-project.status-rejected { opacity: 0.55; }
+.dt-project-head { display: flex; align-items: center; gap: 0.4rem; }
+.dt-project-head > i { color: #e8964a; }
+.dt-badge { font-size: 0.72em; padding: 1px 7px; border-radius: 999px; background: rgba(255, 255, 255, 0.12); }
+.dt-badge.check { background: #b8902a; color: #fff; }
+.dt-badge.done { background: #3e8e5a; color: #fff; }
+.dt-badge.proposed { background: #6a5a9c; color: #fff; }
+.dt-badge.rejected { background: #7a3a3a; color: #fff; }
+.dt-star { margin-left: auto; cursor: pointer; color: #f0d060; }
+.dt-remove { cursor: pointer; opacity: 0.5; }
+.dt-project-head > .dt-remove:first-of-type { margin-left: auto; }
+.dt-project-head > .dt-star ~ .dt-remove { margin-left: 0.3rem; }
+.dt-pbar { position: relative; height: 16px; margin: 0.45rem 0 0.3rem; border-radius: 8px; background: rgba(0, 0, 0, 0.3); border: 1px solid rgba(255, 255, 255, 0.15); }
+.dt-pfill { height: 100%; border-radius: 8px; background: linear-gradient(90deg, #4a7fb8, #6fb8dc); transition: width 0.6s ease; }
+.status-done .dt-pfill { background: linear-gradient(90deg, #3e8e5a, #6fcf8f); }
+.status-check .dt-pfill { background: linear-gradient(90deg, #a07b20, #f0d060); }
+.dt-mark { position: absolute; top: -3px; width: 4px; height: 20px; margin-left: -2px; border-radius: 2px; background: #f0d060; box-shadow: 0 0 3px rgba(0, 0, 0, 0.6); }
+.dt-mark.passed { background: #6fcf8f; }
+.dt-mark.failed { background: #e57a6a; }
+.dt-pct { position: absolute; right: 6px; top: 0; font-size: 0.72em; line-height: 16px; text-shadow: 0 0 3px #000; color: #fff; }
+.dt-project-meta { font-size: 0.82em; opacity: 0.75; }
+.dt-project-reward, .dt-pitch, .dt-gm-note { font-size: 0.85em; margin-top: 0.25rem; }
+.dt-pitch { font-style: italic; opacity: 0.8; }
+.dt-gm-note { color: #e8b04a; }
+.dt-check-due { margin-top: 0.4rem; padding: 0.35rem 0.5rem; border-radius: 4px; background: rgba(240, 208, 96, 0.15); display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
+.dt-check-due button { width: auto; flex: 0 0 auto; }
+.dt-approve { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; margin-top: 0.4rem; padding: 0.4rem; border-radius: 4px; background: rgba(106, 90, 156, 0.18); }
+.dt-approve input[type=number] { width: 4.5em; }
+.dt-approve input[type=text] { flex: 1; min-width: 140px; }
+.dt-approve button { width: auto; flex: 0 0 auto; }
+.dt-pace a, .dt-gm-row a { cursor: pointer; margin-right: 0.5rem; text-decoration: underline; font-size: 0.85em; }
+.dt-gm-row { margin-top: 0.3rem; }
+.dt-log { font-size: 0.82em; margin-top: 0.3rem; }
+.dt-log ul { list-style: none; padding: 0; margin: 0.2rem 0; max-height: 140px; overflow-y: auto; }
+.dt-log li span { opacity: 0.6; margin-right: 0.4rem; }
+.dt-new-project { margin: 0.4rem 0; }
+.dt-proj-done { margin-top: 0.6rem; }
+.dt-builder { padding: 0.6rem; border-radius: 6px; border: 1px solid rgba(232, 150, 74, 0.5); background: rgba(232, 150, 74, 0.06); margin: 0.4rem 0; display: flex; flex-direction: column; gap: 0.45rem; }
+.dt-builder-kinds { display: flex; flex-wrap: wrap; gap: 0.3rem; }
+.dt-builder-kinds button { width: auto; flex: 0 0 auto; }
+.dt-builder-kinds button.active { background: #c46a2b; color: #fff; border-color: #e8964a; }
+.dt-builder-body label { display: flex; flex-direction: column; gap: 0.15rem; font-size: 0.9em; }
+.dt-builder-body .dt-row label { flex: 1; }
+.dt-builder-preview { padding: 0.4rem 0.6rem; border-radius: 4px; background: rgba(0, 0, 0, 0.18); }
+.dt-builder-preview p { margin: 0.2rem 0; }
+.dt-ok { color: #6fcf8f; }
+.dt-bad { color: #e57a6a; }
+.dt-builder-buttons { display: flex; gap: 0.4rem; }
+
+/* Campaign tab */
+.dnd-toolkit .dt-camp-tabs { display: flex; flex-wrap: wrap; gap: 0.3rem; margin: 0.4rem 0; }
+.dnd-toolkit .dt-camp-tabs button { width: auto; flex: 0 0 auto; }
+.dnd-toolkit .dt-camp-tabs button.active { background: #6a4c9c; color: #fff; border-color: #9a7ccc; }
+.dnd-toolkit .dt-camp-tabs small { opacity: 0.7; }
+.dnd-toolkit .dt-camp-filter { width: 100%; margin-bottom: 0.4rem; }
+.dnd-toolkit .dt-standing { display: inline-flex; align-items: center; gap: 2px; margin-left: 0.4rem; vertical-align: middle; }
+.dnd-toolkit .dt-standing i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; background: rgba(255, 255, 255, 0.12); }
+.dnd-toolkit .dt-standing i:nth-child(-n+3).on { background: #d9534f; }
+.dnd-toolkit .dt-standing i:nth-child(4).on { background: #aaa; }
+.dnd-toolkit .dt-standing i:nth-child(n+5).on { background: #5cb85c; }
+.dnd-toolkit .dt-standing b { font-weight: normal; font-size: 0.8em; margin-left: 0.3rem; opacity: 0.85; }
+.dnd-toolkit .dt-campaign .dt-actions input[type=text] { flex: 1; min-width: 120px; }
+.dnd-toolkit .dt-campaign .dt-actions button { width: auto; flex: 0 0 auto; }
+.dnd-toolkit .dt-person.dead { opacity: 0.55; }
+.dnd-toolkit .dt-person.dead .dt-enc-head strong { text-decoration: line-through; }
+.dnd-toolkit .dt-quest.done { border-left: 3px solid #5cb85c; }
+.dnd-toolkit .dt-quest.failed { border-left: 3px solid #d9534f; opacity: 0.75; }
+.dnd-toolkit .dt-quest select { width: auto; margin-left: 0.4rem; }
+.dnd-toolkit .dt-steps { list-style: none; padding-left: 0.2rem; margin: 0.2rem 0; }
+.dnd-toolkit .dt-camp-log { list-style: none; padding: 0; }
+.dnd-toolkit .dt-camp-log li { padding: 0.15rem 0; border-bottom: 1px solid rgba(255, 255, 255, 0.06); }
+.dnd-toolkit .dt-camp-log li span { opacity: 0.6; margin-right: 0.4rem; }
+
+/* Monster turn cards */
+.dt-combat-card ul { margin: 0.2rem 0 0.3rem; padding-left: 1.1rem; }
+.dt-hpbar { display: inline-block; width: 60px; height: 6px; border-radius: 3px; background: rgba(0, 0, 0, 0.25); vertical-align: middle; overflow: hidden; }
+.dt-hpbar span { display: block; height: 100%; background: linear-gradient(90deg, #c0392b, #e67e22); }
+.dt-turn-actions { display: flex; flex-wrap: wrap; gap: 0.2rem; }
+.dt-turn-actions button { flex: 1 1 45%; margin: 0; font-size: 0.85em; line-height: 1.6; }
+.dt-combat-card li button { width: auto; margin-left: 0.3rem; font-size: 0.8em; line-height: 1.4; }

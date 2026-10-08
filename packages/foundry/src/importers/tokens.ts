@@ -37,6 +37,8 @@ export interface PlaceOptions {
   torchBearers?: boolean;
   /** Which fight these tokens belong to (defaults to the encounter's seed). */
   encounterId?: string;
+  /** The fight is in the boss's lair: its leader gets lair actions. */
+  lair?: boolean;
 }
 
 /** Token light for a torch-bearer. */
@@ -112,7 +114,7 @@ export async function placeEncounter(encounter: { groups: readonly EncounterGrou
         y: sceneY + cell[1] * gs,
         hidden: !!opts.hidden,
         name: g.name,
-        flags: { [MODULE_ID]: { encounter: encounterId, leader: g.role === "leader" || g.role === "solo" } },
+        flags: { [MODULE_ID]: { encounter: encounterId, leader: g.role === "leader" || g.role === "solo", roles: [...(g.monster.roles ?? []), ...(g.role ? [g.role] : [])], type: g.monster.type, cr: g.monster.cr, lair: !!opts.lair && (g.role === "leader" || g.role === "solo") } },
         ...(torch ? { light: TORCH_LIGHT } : {}),
       });
       tokens.push(td.toObject());

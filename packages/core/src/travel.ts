@@ -18,7 +18,7 @@ export const TERRAINS: Record<Terrain, { label: string; tags: string; map: Battl
   forest: { label: "Forest", tags: "forest", map: "clearing", difficult: true, navDc: 13, forageDc: 10, danger: 0.4 },
   hills: { label: "Hills", tags: "hill", map: "ruins", difficult: false, navDc: 12, forageDc: 12, danger: 0.35 },
   mountains: { label: "Mountains", tags: "mountain", map: "cave", difficult: true, navDc: 15, forageDc: 15, danger: 0.4 },
-  swamp: { label: "Swamp", tags: "swamp", map: "clearing", difficult: true, navDc: 15, forageDc: 13, danger: 0.45 },
+  swamp: { label: "Swamp", tags: "swamp", map: "swamp", difficult: true, navDc: 15, forageDc: 13, danger: 0.45 },
   desert: { label: "Desert", tags: "desert", map: "ruins", difficult: false, navDc: 15, forageDc: 18, danger: 0.35 },
   arctic: { label: "Arctic", tags: "arctic", map: "clearing", difficult: true, navDc: 15, forageDc: 18, danger: 0.4 },
   coast: { label: "Coast", tags: "coast", map: "road", difficult: false, navDc: 10, forageDc: 10, danger: 0.3 },

@@ -4,7 +4,7 @@ import { ensureFolder, esc, MODULE_ID } from "../util.ts";
 /** Loot sections in reading order, with their headings. */
 const LOOT_GROUPS: [LootItem["kind"][], string][] = [
   [["magic"], "Magic items"], [["consumable"], "Potions and scrolls"], [["gem", "art"], "Valuables"], [["trade"], "Trade goods"],
-  [["gear"], "Gear"], [["trinket"], "Curiosities"], [["part"], "Worth harvesting"], [["key"], "Keys"],
+  [["gear"], "Gear"], [["trinket"], "Curiosities"], [["part"], "Worth harvesting"], [["book"], "Books"], [["key"], "Keys"],
 ];
 
 const lootValue = (i: LootItem) => (i.kind === "key" ? "" : i.rarity && (i.kind === "magic" || i.kind === "consumable") ? i.rarity : `${i.valueGp.toLocaleString()} gp${i.quantity > 1 ? " each" : ""}`);
@@ -70,6 +70,7 @@ export function encounterHtml(e: Encounter, { heading = true } = {}): string {
 function roomHtml(key: RoomKey): string {
   let html = `<p>${esc(key.description)}</p>`;
   if (key.encounter) html += `<h3>Encounter — ${esc(TEMPLATES[key.encounter.template])}</h3>${encounterHtml(key.encounter, { heading: false })}`;
+  if (key.furniture?.length) html += `<p><em>Furnishings are painted on the map. They don't block movement, but a table or a pew gives half cover and a bookcase three-quarters.</em></p>`;
   if (key.notes?.length) html += `<h3>Doors and keys</h3><ul>${key.notes.map((n) => `<li>${esc(n)}</li>`).join("")}</ul>`;
   if (key.trap) {
     html += `<p><strong>Trap:</strong> ${esc(key.trap)}</p>`;

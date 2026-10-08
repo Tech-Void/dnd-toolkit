@@ -39,6 +39,7 @@ const DOOR_FEEL: Record<DoorLock["kind"], [title: string, text: string]> = {
   stuck: ["The door is stuck", "It's stuck fast in its frame; it might give with some force."],
   barred: ["The door won't budge", "Something heavy holds it shut from the other side."],
   arcane: ["The door is sealed", "It's locked, and the keyhole glows faintly with magic."],
+  sealed: ["The door won't open", "There's no handle and no keyhole. Something else in here must open it."],
 };
 
 /** Player side: the prompt when they click a locked door, and the roll. */

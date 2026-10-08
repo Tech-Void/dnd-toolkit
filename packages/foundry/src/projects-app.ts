@@ -316,7 +316,7 @@ export class ProjectsApp extends ApplicationV2 {
         lines.push({ ok: hasTool(actor, r.tool), text: `${toolLabel(r.tool)}${hasTool(actor, r.tool) ? "" : ": you don't have them"}` });
         for (const m of r.materials) {
           const miss = match.missing.find((x) => x.tag === m.tag);
-          lines.push({ ok: !miss, text: `${m.quantity}× ${MATERIAL_LABELS[m.tag]}${miss ? `: short by ${miss.quantity}` : `: ${match.use.filter((u) => stacks.find((s) => s.id === u.id && (s.tag ?? "") === m.tag) || true).map((u) => `${u.quantity}× ${u.name}`).join(", ")}`}` });
+          lines.push({ ok: !miss, text: `${m.quantity}× ${MATERIAL_LABELS[m.tag]}${miss ? `: short by ${miss.quantity}` : `: ${match.use.filter((u) => stacks.find((s) => s.id === u.id)?.tag === m.tag).map((u) => `${u.quantity}× ${u.name}`).join(", ")}`}` });
         }
         if (r.gp) lines.push({ ok: gold(actor) >= r.gp, text: `${r.gp} gp (you have ${gold(actor)})` });
         project = craftProject({ ...r.output, quantity: r.output.quantity } as LootItem, { day, tool: r.tool, hours: r.hours, gp: r.gp, dc: r.dc, materials: match.use.map((u) => ({ name: u.name, quantity: u.quantity })) });

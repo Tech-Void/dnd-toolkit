@@ -25,3 +25,7 @@ export * from "./books.ts";
 export * from "./projects.ts";
 export * from "./crafting.ts";
 export * from "./camp.ts";
+export * from "./rooms.ts";
+export * from "./campaign.ts";
+export * from "./tactics.ts";
+export * from "./map-puzzles.ts";

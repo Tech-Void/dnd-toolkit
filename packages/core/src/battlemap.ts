@@ -8,7 +8,7 @@ import { floorOutlines, loopWalls, smoothLoop, type Point } from "./outline.ts";
 // Small, single-fight battlemaps: a clearing, a shop floor, a cave grotto...
 // Everything is in grid cells; the Foundry importer turns it into a scene.
 
-export type BattlemapSetting = "clearing" | "road" | "cave" | "shop" | "tavern" | "ruins" | "camp" | "town";
+export type BattlemapSetting = "clearing" | "road" | "cave" | "shop" | "tavern" | "ruins" | "camp" | "town" | "graveyard" | "temple" | "docks" | "bridge" | "mine" | "farm" | "swamp";
 export type BattlemapSize = "small" | "medium" | "large";
 
 export const BATTLEMAP_SETTINGS: Record<BattlemapSetting, { label: string; outdoor: boolean }> = {
@@ -20,6 +20,13 @@ export const BATTLEMAP_SETTINGS: Record<BattlemapSetting, { label: string; outdo
   ruins: { label: "Ruins", outdoor: true },
   camp: { label: "Bandit camp", outdoor: true },
   town: { label: "Town streets", outdoor: true },
+  graveyard: { label: "Graveyard", outdoor: true },
+  temple: { label: "Temple", outdoor: false },
+  docks: { label: "Docks", outdoor: true },
+  bridge: { label: "River bridge", outdoor: true },
+  mine: { label: "Mine", outdoor: false },
+  farm: { label: "Farmstead", outdoor: true },
+  swamp: { label: "Swamp", outdoor: true },
 };
 
 export type TownSize = "hamlet" | "village" | "town" | "city";
@@ -43,12 +50,13 @@ export interface TownBuilding {
 
 const SIZES: Record<BattlemapSize, [number, number]> = { small: [20, 15], medium: [28, 20], large: [36, 26] };
 
-export type Ground = "grass" | "dirt" | "road" | "stone" | "wood" | "cave" | "water" | "rock";
+export type Ground = "grass" | "dirt" | "road" | "stone" | "wood" | "cave" | "water" | "rock" | "mud";
 
 export type PropKind =
   | "tree" | "bush" | "boulder" | "log" | "stalagmite" | "mushrooms" | "rubble" | "pillar" | "altar"
   | "table" | "chair" | "barrel" | "crate" | "counter" | "shelf" | "bed" | "chest" | "hearth" | "rug" | "stairs"
-  | "campfire" | "tent" | "cart" | "well";
+  | "campfire" | "tent" | "cart" | "well"
+  | "tombstone" | "grave" | "statue" | "pew" | "boat" | "crops" | "hay" | "fence" | "mineCart" | "support" | "deadTree" | "reeds";
 
 /** none: walk through it. move: blocks movement only. all: blocks movement and sight (gets walls). */
 export type Blocks = "none" | "move" | "all";
@@ -67,7 +75,18 @@ export interface Prop {
 export interface BattleWall extends WallSegment {
   /** Blocks movement but not sight or light. */
   window?: boolean;
+  /** The edge of a ledge: blocks movement (climb it) but not sight. */
+  cliff?: boolean;
 }
+
+/** Raised ground: its squares, how high, and where a slope or steps lead up. */
+export interface Ledge {
+  cells: Cell[];
+  height: number;
+  ramps: Cell[];
+}
+
+export type FightLayout = "standoff" | "ambush" | "defend";
 
 export interface BattleLight {
   /** Center, in grid units. */
@@ -106,6 +125,10 @@ export interface Battlemap {
   buildings?: TownBuilding[];
   /** Traps on the ground: the squares that set each one off. */
   traps?: PlacedTrap[];
+  /** Raised ground with cliff edges. */
+  ledges?: Ledge[];
+  /** How the fight is set up. */
+  layout?: FightLayout;
 }
 
 export interface PlacedTrap {
@@ -127,6 +150,10 @@ export interface BattlemapOptions {
   traps?: boolean;
   /** For trap damage and lock DCs. Default 3. */
   partyLevel?: number;
+  /** Raised ledges, outcrops and daises where they fit. Default true. */
+  elevation?: boolean;
+  /** Standoff (default), ambush (enemies hidden close on both flanks) or defend (hold a point against attackers from the edges). */
+  layout?: FightLayout | "random";
   seed?: string | number;
 }
 
@@ -158,6 +185,18 @@ const PROP_RULES: Record<PropKind, Omit<Prop, "kind" | "x" | "y" | "w" | "h">> =
   tent: { blocks: "all", cover: "three-quarters" },
   cart: { blocks: "move", cover: "three-quarters" },
   well: { blocks: "move", cover: "half" },
+  tombstone: { blocks: "none", cover: "half" },
+  grave: { blocks: "none", difficult: true },
+  statue: { blocks: "all", cover: "three-quarters" },
+  pew: { blocks: "none", cover: "half", difficult: true },
+  boat: { blocks: "none", difficult: true },
+  crops: { blocks: "none", difficult: true },
+  hay: { blocks: "none", cover: "half", difficult: true },
+  fence: { blocks: "none", cover: "half", difficult: true },
+  mineCart: { blocks: "none", cover: "half" },
+  support: { blocks: "none" },
+  deadTree: { blocks: "all", cover: "three-quarters" },
+  reeds: { blocks: "none", difficult: true },
 };
 
 /** Props drawn under everything else; they don't take up their cells. */
@@ -196,6 +235,9 @@ class Builder {
   readonly doorRoles = new Map<string, DoorRole>();
   /** Free-standing wall runs, e.g. broken ruin walls (edge keys). */
   readonly extraWalls = new Set<string>();
+  /** Edges of raised ground (edge keys). */
+  readonly cliffEdges = new Set<string>();
+  readonly ledges: Ledge[] = [];
   readonly notes = new Set<string>();
 
   readonly rng: Rng;
@@ -437,6 +479,312 @@ function camp(b: Builder): (x: number, y: number) => boolean {
   b.notes.add("Tents block sight; anyone inside one is hidden until the flap is opened.");
   b.notes.add("Lookouts: one bandit watches the trees (passive Perception 12); the rest are around the fire.");
   return (x, y) => Math.hypot(x - cx, y - cy) < radius;
+}
+
+// ---------------------------------------------------------------------------
+// More places to fight
+
+/** A low fence (or wall) as runs of props, with gaps; hopping it costs extra movement. */
+function fenceLine(b: Builder, x: number, y: number, len: number, horizontal: boolean, gaps: number[] = []) {
+  let start = 0;
+  for (let i = 0; i <= len; i++) {
+    if (i < len && !gaps.includes(i)) continue;
+    const run = i - start;
+    if (run > 0) {
+      if (horizontal) b.place("fence", x + start, y, run, 1);
+      else b.place("fence", x, y + start, 1, run);
+    }
+    start = i + 1;
+  }
+}
+
+/** A small building with walls, a floor and a door on one side; returns its box. */
+function hut(b: Builder, x: number, y: number, w: number, h: number, region: number, floor: Ground, door: "n" | "s" | "e" | "w"): { x: number; y: number; w: number; h: number; door: Cell } {
+  b.room(x, y, w, h, region, floor);
+  const mid = (a: number, len: number) => a + Math.floor(len / 2);
+  const [inside, outside]: [Cell, Cell] = door === "s" ? [[mid(x, w), y + h - 1], [mid(x, w), y + h]]
+    : door === "n" ? [[mid(x, w), y], [mid(x, w), y - 1]]
+    : door === "e" ? [[x + w - 1, mid(y, h)], [x + w, mid(y, h)]]
+    : [[x, mid(y, h)], [x - 1, mid(y, h)]];
+  b.opening(inside, outside, "door");
+  return { x, y, w, h, door: inside };
+}
+
+function graveyard(b: Builder): (x: number, y: number) => boolean {
+  meadow(b);
+  const x0 = 3;
+  const y0 = 2;
+  const x1 = b.w - 4;
+  const y1 = b.h - 3;
+  const gateY = Math.floor((y0 + y1) / 2);
+  // A path from the gate to the mausoleum.
+  const mw = b.rng.int(4, 6);
+  const mh = b.rng.int(4, 5);
+  const mx = x1 - mw - 1;
+  const my = gateY - Math.floor(mh / 2);
+  for (let x = x0; x < mx; x++) for (const dy of [0, 1]) b.ground[gateY + dy]![x] = "dirt";
+  const crypt = hut(b, mx, my, mw, mh, 1, "stone", "w");
+  b.place("altar", crypt.x + Math.floor(mw / 2) - 1, crypt.y + 1, 2, 1, { region: 1 });
+  b.place("statue", crypt.x + mw - 2, crypt.y + mh - 2, 1, 1, { region: 1 });
+  // Rows of graves: a headstone with a mound in front of it.
+  for (let y = y0 + 2; y < y1 - 2; y += 3) {
+    if (Math.abs(y - gateY) <= 1 || Math.abs(y + 1 - gateY) <= 1) continue;
+    for (let x = x0 + 2; x < mx - 1; x += 2) {
+      if (!b.rng.chance(0.78)) continue;
+      if (b.rng.chance(0.08)) {
+        b.place("grave", x, y + 1, 1, 2);
+        continue;
+      }
+      if (b.place("tombstone", x, y)) for (const dy of [1, 2]) if (b.inside(x, y + dy) && !b.used[y + dy]![x]) b.ground[y + dy]![x] = "dirt";
+    }
+  }
+  b.scatter("statue", b.rng.int(1, 2), () => [2, 2], (x, y) => x > x0 + 1 && x < mx - 2 && y > y0 && y < y1 - 2);
+  fenceLine(b, x0, y0, x1 - x0 + 1, true);
+  fenceLine(b, x0, y1, x1 - x0 + 1, true);
+  fenceLine(b, x0, y0 + 1, y1 - y0 - 1, false, [gateY - y0 - 1, gateY - y0]);
+  fenceLine(b, x1, y0 + 1, y1 - y0 - 1, false);
+  b.scatter("deadTree", b.rng.int(2, 4), () => [1, 1], (x, y) => x > x0 && x < x1 && y > y0 && y < y1, { ground: ["grass", "dirt"] });
+  treeLine(b, 2);
+  b.notes.add("Headstones and the low wall give half cover; climbing the wall costs 5 extra feet of movement.");
+  b.notes.add("Open graves are 6 feet deep: falling in deals 1d6 bludgeoning, and climbing out is a DC 10 Athletics check.");
+  b.notes.add("The mausoleum door is stone and heavy: an action to open (DC 13 Athletics if it's jammed).");
+  return (x, y) => x > b.w * 0.45;
+}
+
+function temple(b: Builder) {
+  const hall = building(b);
+  b.room(hall.x, hall.y, hall.w, hall.h, 1, "stone");
+  // A vestry in a back corner.
+  const vw = b.rng.int(3, 4);
+  const vh = b.rng.int(3, 4);
+  const left = b.rng.chance(0.5);
+  const vx = left ? hall.x : hall.x + hall.w - vw;
+  b.room(vx, hall.y, vw, vh, 2, "wood");
+  b.opening([left ? vx + vw - 1 : vx, hall.y + 1], [left ? vx + vw : vx - 1, hall.y + 1], "door");
+  b.scatter("chest", 1, () => [1, 1], undefined, { region: 2 });
+  b.scatter("shelf", 1, () => [2, 1], undefined, { region: 2 });
+  const cx = hall.x + Math.floor(hall.w / 2);
+  b.place("altar", cx - 1, hall.y + 1, 2, 1);
+  for (const sx of [cx - 4, cx + 3]) b.place("statue", sx, hall.y + 1, 1, 1);
+  b.light(cx - 1.5, hall.y + 1.5, LAMP);
+  b.light(cx + 1.5, hall.y + 1.5, LAMP);
+  // Pews in rows on either side of the aisle.
+  for (let y = hall.y + 4; y < hall.y + hall.h - 3; y += 2) {
+    b.place("pew", cx - 4, y, 3, 1);
+    b.place("pew", cx + 2, y, 3, 1);
+  }
+  // Pillars down both sides.
+  for (let y = hall.y + 3; y < hall.y + hall.h - 2; y += 3) {
+    b.place("pillar", hall.x + 1, y);
+    b.place("pillar", hall.x + hall.w - 2, y);
+  }
+  lamps(b, hall.x, hall.y + 4, hall.w, hall.h - 4, 2);
+  b.notes.add("Pews give half cover and are difficult terrain to climb over; pillars and statues give three-quarters cover.");
+  b.notes.add("The altar is sacred: the GM may decide a fiend or undead touching it takes 1d6 radiant damage.");
+}
+
+function docks(b: Builder): (x: number, y: number) => boolean {
+  const shore = Math.floor(b.h * 0.4);
+  meadow(b);
+  for (let y = shore; y < b.h; y++) for (let x = 0; x < b.w; x++) b.ground[y]![x] = "water";
+  for (let x = 0; x < b.w; x++) for (const y of [shore, shore + 1]) b.ground[y]![x] = "wood";
+  for (let x = 0; x < b.w; x++) b.ground[shore - 1]![x] = "road";
+  // A warehouse on the shore.
+  const ww = b.rng.int(6, 8);
+  const wx = b.rng.int(Math.floor(b.w * 0.5), b.w - ww - 2);
+  const wh = Math.max(3, shore - 3);
+  hut(b, wx, 1, ww, wh, 1, "wood", "s");
+  b.scatter("crate", b.rng.int(3, 6), () => [1, 1], undefined, { region: 1 });
+  b.scatter("barrel", b.rng.int(2, 4), () => [1, 1], undefined, { region: 1 });
+  // Piers out into the water, with boats tied alongside.
+  const piers = b.rng.int(2, 3);
+  for (let i = 0; i < piers; i++) {
+    const px = Math.floor(((i + 0.5) * b.w) / piers) + b.rng.int(-2, 2);
+    const end = b.rng.int(b.h - 5, b.h - 2);
+    for (let y = shore + 2; y < end; y++) for (const dx of [0, 1]) if (b.inside(px + dx, y)) b.ground[y]![px + dx] = "wood";
+    const side = b.rng.chance(0.5) ? -1 : 2;
+    b.place("boat", px + (side < 0 ? -1 : 2), b.rng.int(shore + 3, Math.max(shore + 3, end - 4)), 1, 3);
+    b.place("barrel", px, end - 1);
+    b.light(px + 1, end - 0.5, LAMP);
+  }
+  b.scatter("crate", b.rng.int(3, 6), () => [1, 1], (x, y) => y === shore || y === shore + 1, { ground: ["wood"] });
+  b.scatter("barrel", b.rng.int(2, 4), () => [1, 1], (x, y) => y === shore || y === shore + 1, { ground: ["wood"] });
+  for (let x = 3; x < b.w; x += 8) b.light(x + 0.5, shore + 0.5, LAMP);
+  b.notes.add("The water is deep: swimming creatures move at half speed and can't take reactions; armor heavier than leather means sinking (DC 12 Athletics each turn).");
+  b.notes.add("Shoving someone off a pier drops them 5 feet into the water. Stacked crates give half cover.");
+  b.notes.add("Boats rock underfoot: difficult terrain, and a DC 10 Dexterity save on a hit or be knocked prone.");
+  return (x, y) => y >= shore;
+}
+
+function bridge(b: Builder): (x: number, y: number) => boolean {
+  meadow(b);
+  const width = b.rng.int(4, 6);
+  let rx = Math.floor(b.w / 2) - Math.floor(width / 2);
+  const banks: number[] = [];
+  for (let y = 0; y < b.h; y++) {
+    if (b.rng.chance(0.3)) rx = Math.max(Math.floor(b.w * 0.35), Math.min(Math.floor(b.w * 0.6), rx + b.rng.pick([-1, 1])));
+    banks.push(rx);
+    for (let i = 0; i < width; i++) b.ground[y]![rx + i] = "water";
+    for (const dx of [-1, width]) if (b.rng.chance(0.6)) b.ground[y]![rx + dx] = "dirt";
+  }
+  const by = Math.floor(b.h / 2) + b.rng.int(-2, 2);
+  const bx0 = Math.min(...banks.slice(by - 1, by + 2)) - 2;
+  const bx1 = Math.max(...banks.slice(by - 1, by + 2)) + width + 1;
+  for (let y = by - 1; y <= by + 1; y++) for (let x = bx0; x <= bx1; x++) b.ground[y]![x] = "wood";
+  // A road up to the bridge on both banks.
+  for (let x = 0; x < b.w; x++) if (b.ground[by]![x] !== "wood") for (const dy of [-1, 0, 1]) b.ground[by + dy]![x] = "road";
+  const offRoad = (_x: number, y: number) => Math.abs(y - by) >= 3;
+  b.scatter("reeds", Math.round(b.h * 1.2), () => [1, 1], (x, y) => offRoad(x, y) && [-1, 1].some((d) => b.ground[y]?.[x + d] === "water"));
+  treeLine(b, 2, (x, y) => !offRoad(x, y));
+  b.scatter("tree", Math.round((b.w * b.h) / 70), () => [1, 1], offRoad, { ground: ["grass", "dirt"] });
+  b.scatter("bush", Math.round((b.w * b.h) / 35), () => [1, 1], offRoad, { ground: ["grass", "dirt"] });
+  b.scatter("boulder", b.rng.int(2, 4), () => [1, 1], offRoad, { ground: ["grass", "dirt"] });
+  b.notes.add("The river is 10 feet deep and fast: a creature in it makes a DC 12 Athletics check at the start of its turn or is swept 10 feet downstream.");
+  b.notes.add("The bridge is three squares wide with a low rail: a creature shoved off falls 10 feet into the river.");
+  b.notes.add("Reeds along the banks are difficult terrain and lightly obscure whoever crouches in them.");
+  return (x) => x > (banks[0] ?? b.w / 2) + width;
+}
+
+function mine(b: Builder) {
+  cave(b);
+  const nearRock = (x: number, y: number) => N4.some(([dx, dy]) => !b.walkable(x + dx, y + dy));
+  b.scatter("support", Math.round((b.w * b.h) / 60), () => [1, 1], nearRock, { ground: ["cave"] });
+  b.scatter("mineCart", b.rng.int(2, 3), () => [1, 1], (x, y) => !nearRock(x, y), { ground: ["cave"] });
+  b.scatter("crate", b.rng.int(2, 4), () => [1, 1], nearRock, { ground: ["cave"] });
+  b.scatter("barrel", b.rng.int(1, 3), () => [1, 1], nearRock, { ground: ["cave"] });
+  const floor = cellsWhere(b, (x, y) => b.ground[y]![x] === "cave" && !b.used[y]![x] && nearRock(x, y));
+  for (let i = 0; i < 3 && floor.length; i++) {
+    const [x, y] = b.rng.pick(floor);
+    b.light(x + 0.5, y + 0.5, LAMP);
+  }
+  b.notes.add("Timber props hold up the roof: knocking one out (DC 15 Athletics) brings down rubble in a 10-foot square (DC 13 Dexterity save, 2d10 bludgeoning).");
+  b.notes.add("Mine carts give half cover; shoving a loaded cart (DC 12 Athletics) sends it 20 feet: 2d6 bludgeoning to whatever it hits.");
+}
+
+function farm(b: Builder): (x: number, y: number) => boolean {
+  meadow(b);
+  // Farmhouse and barn along the top, a fenced field below.
+  const house = hut(b, 2, 2, b.rng.int(6, 7), b.rng.int(4, 5), 1, "wood", "s");
+  b.place("table", house.x + 1, house.y + 1, 2, 1, { region: 1 });
+  b.place("bed", house.x + house.w - 2, house.y + 1, 1, 2, { region: 1 });
+  b.place("hearth", house.x, house.y + house.h - 2, 1, 1, { region: 1 });
+  b.light(house.x + 0.5, house.y + house.h - 1.5, FIRE);
+  const bw = b.rng.int(7, 9);
+  const barn = hut(b, b.w - bw - 3, 2, bw, b.rng.int(5, 6), 2, "dirt", "s");
+  b.scatter("hay", b.rng.int(3, 5), () => (b.rng.chance(0.5) ? [2, 1] : [1, 2]), undefined, { region: 2 });
+  b.scatter("barrel", b.rng.int(1, 2), () => [1, 1], undefined, { region: 2 });
+  b.place("well", house.x + house.w + 2, house.y + house.h + 1);
+  b.scatter("cart", 1, () => [2, 3], (x, y) => y > 2 && y < 10, { ground: ["grass", "dirt"] });
+  // The field.
+  const fx0 = 3;
+  const fy0 = Math.floor(b.h * 0.5);
+  const fx1 = b.w - 4;
+  const fy1 = b.h - 3;
+  for (let y = fy0 + 1; y < fy1; y++) for (let x = fx0 + 1; x < fx1; x++) b.ground[y]![x] = "dirt";
+  for (let y = fy0 + 1; y < fy1; y += 2) for (let x = fx0 + 1; x < fx1; x++) if (b.rng.chance(0.85)) b.place("crops", x, y);
+  fenceLine(b, fx0, fy0, fx1 - fx0 + 1, true, [Math.floor((fx1 - fx0) / 2), Math.floor((fx1 - fx0) / 2) + 1]);
+  fenceLine(b, fx0, fy1, fx1 - fx0 + 1, true);
+  b.scatter("hay", b.rng.int(1, 3), () => [2, 1], (x, y) => y < fy0 - 1 && y > 7, { ground: ["grass", "dirt"] });
+  treeLine(b, 2);
+  b.notes.add("The crops are waist-high: difficult terrain, and a crouching Medium creature is lightly obscured in them.");
+  b.notes.add("Hay bales give half cover. The barn's loft (DC 10 Athletics up the ladder) gives a view over the whole farm.");
+  return (x, y) => y >= fy0 || (x >= barn.x && y < barn.y + barn.h + 1);
+}
+
+function swamp(b: Builder): (x: number, y: number) => boolean {
+  const n = noise(b.rng, b.w, b.h, 4);
+  for (let y = 0; y < b.h; y++) for (let x = 0; x < b.w; x++) b.ground[y]![x] = n[y]![x]! < 0.32 ? "water" : n[y]![x]! < 0.52 ? "mud" : "grass";
+  let hutBox: { x: number; y: number; w: number; h: number } | null = null;
+  if (b.rng.chance(0.6)) {
+    for (let i = 0; i < 30 && !hutBox; i++) {
+      const x = b.rng.int(Math.floor(b.w * 0.55), b.w - 7);
+      const y = b.rng.int(2, b.h - 7);
+      hutBox = hut(b, x, y, 5, 4, 1, "wood", b.rng.pick(["s", "w"] as const));
+    }
+    if (hutBox) {
+      b.scatter("barrel", 1, () => [1, 1], undefined, { region: 1 });
+      b.scatter("bed", 1, () => [1, 2], undefined, { region: 1 });
+      b.light(hutBox.x + 2.5, hutBox.y + 1.5, LAMP);
+      b.notes.add("The hut stands on stilts over the water: its floor is 5 feet up, reached by a rickety ladder.");
+    }
+  }
+  b.scatter("deadTree", Math.round((b.w * b.h) / 70), () => [1, 1], undefined, { ground: ["grass", "mud"] });
+  b.scatter("tree", Math.round((b.w * b.h) / 140), () => [1, 1], undefined, { ground: ["grass"] });
+  b.scatter("reeds", Math.round((b.w * b.h) / 18), () => [1, 1], (x, y) => N4.some(([dx, dy]) => b.ground[y + dy]?.[x + dx] === "water"), { ground: ["mud", "grass", "water"] });
+  b.scatter("bush", Math.round((b.w * b.h) / 45), () => [1, 1], undefined, { ground: ["grass"] });
+  b.scatter("log", b.rng.int(1, 3), () => (b.rng.chance(0.5) ? [3, 1] : [1, 3]), undefined, { ground: ["mud", "grass"] });
+  treeLine(b, 2);
+  b.notes.add("Mud is difficult terrain. The pools are waist-deep: difficult terrain, and Small creatures must swim.");
+  b.notes.add("Reeds lightly obscure whoever stands in them; things lurk underwater (Stealth +2 for anything that can breathe there).");
+  return (x, y) => (hutBox ? x >= hutBox.x - 3 : x > b.w * 0.5) && y >= 0;
+}
+
+// ---------------------------------------------------------------------------
+// Elevation
+
+/** Grounds a ledge can rise from, per setting. */
+const LEDGE_GROUND: Partial<Record<BattlemapSetting, Ground[]>> = {
+  clearing: ["grass", "dirt"], road: ["grass", "dirt"], camp: ["grass", "dirt"], ruins: ["stone", "grass"], graveyard: ["grass", "dirt"],
+  cave: ["cave"], mine: ["cave"], bridge: ["grass", "dirt"], swamp: ["grass"],
+};
+
+/**
+ * Raise a blob of open ground into a ledge 5-15 feet high, with cliff edges all round except where
+ * a slope leads up. Props on it stay; walls, water and buildings are avoided.
+ */
+function raiseLedge(b: Builder, setting: BattlemapSetting): Ledge | null {
+  const grounds = LEDGE_GROUND[setting];
+  if (!grounds) return null;
+  // Clear of free-standing walls (ruins) so a cliff never runs into one and the slope always leads somewhere.
+  const nearWall = (x: number, y: number) => N4.some(([dx, dy]) => b.extraWalls.has(edgeKey([x, y], [x + dx, y + dy])));
+  const ok = (x: number, y: number) => edgeDist(b, x, y) >= 3 && b.region[y]![x] === 0 && grounds.includes(b.ground[y]![x]!) && !nearWall(x, y);
+  const n = noise(b.rng, b.w, b.h, 3);
+  for (let attempt = 0; attempt < 30; attempt++) {
+    // A rounded outcrop with a ragged rim, away from the map's edges.
+    const cx = b.rng.int(5, b.w - 6);
+    const cy = b.rng.int(4, b.h - 5);
+    const rx = b.rng.int(2, Math.max(3, Math.floor(b.w / 8)));
+    const ry = b.rng.int(2, Math.max(3, Math.floor(b.h / 7)));
+    const cells: Cell[] = [];
+    const has = new Set<string>();
+    for (let y = cy - ry - 1; y <= cy + ry + 1; y++) {
+      for (let x = cx - rx - 1; x <= cx + rx + 1; x++) {
+        if (!b.inside(x, y) || !ok(x, y)) continue;
+        const d = ((x - cx) / (rx + 0.5)) ** 2 + ((y - cy) / (ry + 0.5)) ** 2;
+        if (d <= 0.8 + n[y]![x]! * 0.45) {
+          cells.push([x, y]);
+          has.add(`${x},${y}`);
+        }
+      }
+    }
+    if (cells.length < 10) continue;
+    // Fill pinholes so the top is solid.
+    const edges: [Cell, Cell][] = [];
+    for (const [x, y] of cells) for (const [dx, dy] of N4) if (!has.has(`${x + dx},${y + dy}`)) edges.push([[x, y], [x + dx, y + dy]]);
+    // One or two slopes up, on the side facing the open map.
+    const rampCount = b.rng.int(1, 2);
+    const ramps: Cell[] = [];
+    for (const [inside, outside] of b.rng.shuffle(edges)) {
+      if (ramps.length >= rampCount) break;
+      if (!b.walkable(...outside) || b.used[outside[1]]![outside[0]] || nearWall(...outside)) continue;
+      if (ramps.some(([x, y]) => Math.abs(x - inside[0]) + Math.abs(y - inside[1]) < 4)) continue;
+      ramps.push(inside);
+    }
+    if (!ramps.length) continue;
+    const rampSet = new Set(ramps.map(([x, y]) => `${x},${y}`));
+    for (const [inside, outside] of edges) {
+      // The slope is open along its outer side (and the squares beside it stay clear).
+      if (rampSet.has(`${inside[0]},${inside[1]}`) && b.walkable(...outside)) {
+        b.used[outside[1]]![outside[0]] = true;
+        continue;
+      }
+      b.cliffEdges.add(edgeKey(inside, outside));
+    }
+    const ledge: Ledge = { cells, height: b.rng.pick([5, 10, 10, 15]), ramps };
+    b.ledges.push(ledge);
+    return ledge;
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -782,8 +1130,8 @@ function distances(b: Builder, walls: Set<string>, from: Cell[]): number[][] {
 }
 
 /** Wall edges between different regions, plus free-standing walls; doors and windows stay open to movement only as doors. */
-function wallEdges(b: Builder): Map<string, "wall" | Opening> {
-  const edges = new Map<string, "wall" | Opening>();
+function wallEdges(b: Builder): Map<string, "wall" | "cliff" | Opening> {
+  const edges = new Map<string, "wall" | "cliff" | Opening>();
   const add = (a: Cell, c: Cell) => {
     const key = edgeKey(a, c);
     edges.set(key, b.openings.get(key) ?? "wall");
@@ -795,11 +1143,12 @@ function wallEdges(b: Builder): Map<string, "wall" | Opening> {
     }
   }
   for (const key of b.extraWalls) if (!edges.has(key)) edges.set(key, "wall");
+  for (const key of b.cliffEdges) if (!edges.has(key)) edges.set(key, "cliff");
   return edges;
 }
 
 /** Merge unit edges into segments: runs of plain wall join up, doors and windows stay one cell wide. */
-function segments(edges: Map<string, "wall" | Opening>): BattleWall[] {
+function segments(edges: Map<string, "wall" | "cliff" | Opening>): BattleWall[] {
   const out: BattleWall[] = [];
   const parse = (k: string) => k.slice(2).split(",").map(Number) as Cell;
   for (const dir of ["h", "v"] as const) {
@@ -811,13 +1160,15 @@ function segments(edges: Map<string, "wall" | Opening>): BattleWall[] {
       const kind = edges.get(`${dir}:${x},${y}`)!;
       const seg: BattleWall = dir === "h" ? { x1: x, y1: y, x2: x + 1, y2: y, door: kind === "door" } : { x1: x, y1: y, x2: x, y2: y + 1, door: kind === "door" };
       if (kind === "window") seg.window = true;
-      if (kind === "wall" && run && run.x2 === seg.x1 && run.y2 === seg.y1) {
-        run.x2 = seg.x2;
-        run.y2 = seg.y2;
+      if (kind === "cliff") seg.cliff = true;
+      const joins = (kind === "wall" || kind === "cliff") && run && !!run.cliff === (kind === "cliff");
+      if (joins && run!.x2 === seg.x1 && run!.y2 === seg.y1) {
+        run!.x2 = seg.x2;
+        run!.y2 = seg.y2;
         continue;
       }
       out.push(seg);
-      run = kind === "wall" ? seg : null;
+      run = kind === "wall" || kind === "cliff" ? seg : null;
     }
   }
   return out;
@@ -837,6 +1188,7 @@ function transpose(m: Battlemap): Battlemap {
     outlines: m.outlines?.map((loop) => loop.map(([x, y]): Point => [y, x])),
     zones: { party: m.zones.party.map(([x, y]): Cell => [y, x]), enemies: m.zones.enemies.map(([x, y]): Cell => [y, x]) },
     traps: m.traps?.map((t) => ({ ...t, cells: t.cells.map(([x, y]): Cell => [y, x]) })),
+    ledges: m.ledges?.map((l) => ({ ...l, cells: l.cells.map(([x, y]): Cell => [y, x]), ramps: l.ramps.map(([x, y]): Cell => [y, x]) })),
   };
 }
 
@@ -849,6 +1201,13 @@ const TITLES: Record<BattlemapSetting, string[]> = {
   ruins: ["Ruined chapel", "Old watchtower ruins", "Forgotten shrine", "Crumbling keep"],
   camp: ["Bandit camp", "Raiders' camp", "Smugglers' camp"],
   town: ["Market street", "Town square", "Main street"],
+  graveyard: ["Old churchyard", "Paupers' field", "The quiet acre", "Hillside cemetery"],
+  temple: ["Chapel of the Dawn", "Shrine of the Harvest", "Temple of the Watchful Eye", "Old abbey church"],
+  docks: ["Harbor wharf", "Fishermen's pier", "Smugglers' dock", "River landing"],
+  bridge: ["Old stone ford", "Toll bridge", "Rope-bridge crossing", "Mill bridge"],
+  mine: ["Abandoned mine", "Collapsed dig", "Silver seam", "Kobold-haunted shaft"],
+  farm: ["Lonely farmstead", "Miller's homestead", "Pumpkin farm", "Hollow Creek farm"],
+  swamp: ["Sunken marsh", "Witch's bog", "Fetid mire", "Reedwater fen"],
 };
 
 export function generateBattlemap(opts: BattlemapOptions = {}): Battlemap {
@@ -857,11 +1216,12 @@ export function generateBattlemap(opts: BattlemapOptions = {}): Battlemap {
   const setting = !opts.setting || opts.setting === "random" ? rng.pick((Object.keys(BATTLEMAP_SETTINGS) as BattlemapSetting[]).filter((s) => s !== "town")) : opts.setting;
   const townSize = opts.townSize ?? (opts.size === "small" ? "hamlet" : opts.size === "large" ? "town" : "village");
   const [w, h] = setting === "town" ? TOWN_SIZES[townSize].slice(0, 2) as [number, number] : SIZES[opts.size ?? "medium"];
+  const caveLike = setting === "cave" || setting === "mine";
   const night = !!opts.night;
 
   // A few tries in case props leave the enemies unreachable (rare, since blocking props keep a clear ring).
   for (let attempt = 0; ; attempt++) {
-    const b = new Builder(createRng(`${rng.seed}:${attempt}`), w, h, setting === "cave" ? "rock" : "grass");
+    const b = new Builder(createRng(`${rng.seed}:${attempt}`), w, h, caveLike ? "rock" : "grass");
     let enemyArea: ((x: number, y: number) => boolean) | undefined;
     let buildings: TownBuilding[] | undefined;
     if (setting === "town") buildings = town(b, townSize);
@@ -875,16 +1235,36 @@ export function generateBattlemap(opts: BattlemapOptions = {}): Battlemap {
     }
     else if (setting === "ruins") ruins(b);
     else if (setting === "camp") enemyArea = camp(b);
+    else if (setting === "graveyard") enemyArea = graveyard(b);
+    else if (setting === "temple") {
+      temple(b);
+      enemyArea = (x, y) => b.region[y]![x]! >= 1 && y < b.h - 8;
+    }
+    else if (setting === "docks") enemyArea = docks(b);
+    else if (setting === "bridge") enemyArea = bridge(b);
+    else if (setting === "mine") mine(b);
+    else if (setting === "farm") enemyArea = farm(b);
+    else if (setting === "swamp") enemyArea = swamp(b);
 
+    // Raised ground (before walls are worked out, so its cliff edges join them).
+    const wantLedges = opts.elevation !== false && LEDGE_GROUND[setting] && b.rng.chance(setting === "cave" || setting === "mine" || setting === "ruins" ? 0.7 : 0.5);
+    if (wantLedges) {
+      const ledge = raiseLedge(b, setting);
+      if (ledge) {
+        b.notes.add(`Raised ground (${ledge.height} ft): climbing the cliff edge takes a DC ${10 + ledge.height / 5} Athletics check and costs extra movement; the slope ${ledge.ramps.length > 1 ? "or steps lead" : "leads"} up freely.`);
+        b.notes.add("Creatures on the high ground have half cover against attacks from below, and can see over low cover.");
+      }
+    }
     const edges = wallEdges(b);
     // Caves get rounded rock faces instead of stair-stepped cell edges.
-    const caveOutlines = setting === "cave" ? floorOutlines(b.region.map((row) => row.map((r) => (r >= 0 ? 1 : 0)))).map((l) => smoothLoop(l, 2)) : [];
+    const caveOutlines = setting === "cave" || setting === "mine" ? floorOutlines(b.region.map((row) => row.map((r) => (r >= 0 ? 1 : 0)))).map((l) => smoothLoop(l, 2)) : [];
     const blocking = new Set([...edges].filter(([, k]) => k !== "door").map(([key]) => key));
 
     // The party comes in from the street, the road's start or the left edge (the cave's left end).
     let entry: Cell[];
-    if (setting === "shop" || setting === "tavern") entry = cellsWhere(b, (x, y) => y >= h - 1);
-    else if (setting === "cave") {
+    if (setting === "shop" || setting === "tavern" || setting === "temple") entry = cellsWhere(b, (x, y) => y >= h - 1);
+    else if (setting === "docks") entry = cellsWhere(b, (x, y) => x === 0 && b.ground[y]![x] !== "water");
+    else if (setting === "cave" || setting === "mine") {
       const xs = cellsWhere(b, (x, y) => b.walkable(x, y)).map(([x]) => x);
       const minX = Math.min(...xs);
       entry = cellsWhere(b, (x) => x <= minX + 1);
@@ -893,11 +1273,51 @@ export function generateBattlemap(opts: BattlemapOptions = {}): Battlemap {
     const reachable = cellsWhere(b, (x, y) => fromParty[y]![x]! < Infinity && !b.used[y]![x]);
     if (!reachable.length && attempt < 8) continue;
 
-    const party = reachable.filter(([x, y]) => fromParty[y]![x]! <= 2);
+    let party = reachable.filter(([x, y]) => fromParty[y]![x]! <= 2);
     const far = Math.max(...reachable.map(([x, y]) => fromParty[y]![x]!));
     // Enemies start in their area (the camp, the building, the tree line), or else as far from the party as it gets.
     let enemies = enemyArea ? reachable.filter(([x, y]) => enemyArea!(x, y) && fromParty[y]![x]! > 3) : [];
     if (!enemies.length) enemies = reachable.filter(([x, y]) => fromParty[y]![x]! >= far * 0.6);
+    // On a map with high ground, the enemies like to hold it.
+    const ledgeCells = new Set(b.ledges.flatMap((l) => l.cells.map(([x, y]) => `${x},${y}`)));
+    const highEnemies = enemies.filter(([x, y]) => ledgeCells.has(`${x},${y}`));
+    if (highEnemies.length >= 4) enemies = [...highEnemies, ...enemies.filter(([x, y]) => !ledgeCells.has(`${x},${y}`))];
+
+    // How the fight is set up.
+    const layout: FightLayout = !opts.layout || opts.layout === "random"
+      ? opts.layout === "random" ? b.rng.weighted([["standoff", 2], ["ambush", 1], ["defend", 1]] as const) : "standoff"
+      : opts.layout;
+    if (layout === "ambush") {
+      // Hidden close in, behind cover, on both sides of the party's way in.
+      const covered = new Set(b.props.filter((p) => p.cover).flatMap((p) => {
+        const near: string[] = [];
+        for (let y = p.y - 1; y <= p.y + p.h; y++) for (let x = p.x - 1; x <= p.x + p.w; x++) near.push(`${x},${y}`);
+        return near;
+      }));
+      const spots = reachable.filter(([x, y]) => fromParty[y]![x]! >= 4 && fromParty[y]![x]! <= 10 && covered.has(`${x},${y}`));
+      if (spots.length >= 4) {
+        enemies = spots;
+        b.notes.add("Ambush: the enemies are hidden behind cover close to the party (Stealth vs passive Perception); anyone who doesn't notice them is surprised.");
+      }
+    } else if (layout === "defend") {
+      // The party holds the middle; the enemy comes from the edges.
+      const mid: Cell = [Math.floor(w / 2), Math.floor(h / 2)];
+      const centre = distances(b, blocking, [mid]);
+      const hold = reachable.filter(([x, y]) => centre[y]![x]! <= 3);
+      const edgesIn = reachable.filter(([x, y]) => edgeDist(b, x, y) <= 1 && centre[y]![x]! < Infinity);
+      if (hold.length >= 4 && edgesIn.length >= 4) {
+        party = hold;
+        enemies = edgesIn;
+        // Makeshift barricades around the position, with gaps.
+        for (let a = 0; a < 12; a++) {
+          const ang = (a / 12) * Math.PI * 2;
+          const x = Math.round(mid[0] + Math.cos(ang) * 5);
+          const y = Math.round(mid[1] + Math.sin(ang) * 4);
+          if (a % 3 !== 0 && b.free(x, y)) b.place(b.rng.pick(["crate", "barrel", "crate"] as const), x, y);
+        }
+        b.notes.add("Hold the line: the party defends the middle; the attackers come from the edges, in waves if you like. Barricades give half cover.");
+      }
+    }
     const enemyCells = b.rng.shuffle(enemies);
     if ((!party.length || !enemyCells.length) && attempt < 8) continue;
 
@@ -911,14 +1331,17 @@ export function generateBattlemap(opts: BattlemapOptions = {}): Battlemap {
       width: w,
       height: h,
       ground: b.ground,
-      walls: setting === "cave" ? loopWalls(caveOutlines) : segments(edges),
-      outlines: setting === "cave" ? caveOutlines : undefined,
+      // Caves keep their smoothed rock walls, plus any ledge edges.
+      walls: caveLike ? [...loopWalls(caveOutlines), ...segments(new Map([...edges].filter(([, k]) => k === "cliff")))] : segments(edges),
+      outlines: setting === "cave" || setting === "mine" ? caveOutlines : undefined,
       props: [...b.props.filter((p) => UNDERLAY.has(p.kind)), ...b.props.filter((p) => !UNDERLAY.has(p.kind))],
       lights: b.lights,
-      darkness: setting === "cave" ? 1 : night ? (outdoor ? 0.75 : 0.6) : 0,
+      darkness: setting === "cave" || setting === "mine" ? 1 : night ? (outdoor ? 0.75 : 0.6) : 0,
       zones: { party: b.rng.shuffle(party), enemies: enemyCells },
       notes: [...b.notes],
       buildings,
+      ledges: b.ledges.length ? b.ledges : undefined,
+      layout,
     };
     // Locks and traps roll on their own stream, so they don't change the layout of a seed.
     const extra = createRng(`${rng.seed}:extras`);
@@ -965,6 +1388,8 @@ function lockBattlemap(m: Battlemap, roles: Map<string, DoorRole>, rng: Rng, lev
 const TRAP_SETTINGS: Partial<Record<BattlemapSetting, { count: [number, number]; wild: boolean }>> = {
   camp: { count: [1, 3], wild: true }, road: { count: [1, 2], wild: true }, clearing: { count: [0, 2], wild: true },
   ruins: { count: [1, 2], wild: false }, cave: { count: [1, 2], wild: false },
+  graveyard: { count: [0, 2], wild: true }, bridge: { count: [1, 2], wild: true }, farm: { count: [0, 2], wild: true },
+  swamp: { count: [1, 2], wild: true }, mine: { count: [1, 2], wild: false },
 };
 
 /** Hide traps on open ground the party is likely to cross: nearer the enemy than the party, off the props. */

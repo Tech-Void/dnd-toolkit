@@ -1,6 +1,8 @@
 import { lockPin, type Battlemap, type Encounter, type Prop } from "@dnd-toolkit/core";
 import { lockedDoorData, trapRegionData } from "../interactive.ts";
-import { battlemapToBlob, roofsToBlob } from "../render-battlemap.ts";
+import { battlemapToBlob, canopyToBlob, roofsToBlob, type BattlemapRenderOptions } from "../render-battlemap.ts";
+import { battlemapArt } from "../fa-assets.ts";
+import { battlemapEffects, effectTiles } from "../effects.ts";
 import { ambientLight, ensureFolder, esc, MODULE_ID } from "../util.ts";
 import { createJournal } from "./journal.ts";
 import { uploadImage } from "./scene.ts";
@@ -48,16 +50,19 @@ export async function createBattlemapScene(m: Battlemap, opts: BattlemapSceneOpt
   const { NONE, NORMAL } = CONST.WALL_SENSE_TYPES;
   const MOVE = CONST.WALL_MOVEMENT_TYPES.NORMAL;
 
-  const blob = await battlemapToBlob(m, { cell: gs });
+  const art = await battlemapArt(m);
+  const look: BattlemapRenderOptions = { cell: gs, textures: art?.textures, props: art?.props, treeShadows: art?.treeShadows, decor: art?.decor, wallArt: art?.walls, lightArt: art?.lights, noCanopy: true };
+  const blob = await battlemapToBlob(m, look);
   const src = await uploadImage(blob, `battlemap-${m.setting}-${m.seed.replace(/[^\w-]/g, "_")}-${Date.now()}.webp`);
 
   const walls: object[] = m.walls.map((w) => ({
     c: [w.x1 * gs, w.y1 * gs, w.x2 * gs, w.y2 * gs],
     door: w.door ? CONST.WALL_DOOR_TYPES.DOOR : CONST.WALL_DOOR_TYPES.NONE,
     move: MOVE,
-    sight: w.window ? NONE : NORMAL,
-    light: w.window ? NONE : NORMAL,
-    sound: NORMAL,
+    // Windows and cliff edges stop feet, not eyes.
+    sight: w.window || w.cliff ? NONE : NORMAL,
+    light: w.window || w.cliff ? NONE : NORMAL,
+    sound: w.cliff ? NONE : NORMAL,
     ...(w.lock ? lockedDoorData(w.lock) : {}),
   }));
   for (const p of m.props) {
@@ -77,7 +82,7 @@ export async function createBattlemapScene(m: Battlemap, opts: BattlemapSceneOpt
   // see beneath it, so stepping through a door shows that building's inside and nothing else.
   const tiles: object[] = [];
   if (m.buildings?.length) {
-    const roofSrc = await uploadImage(await roofsToBlob(m, gs), `roofs-${m.seed.replace(/[^\w-]/g, "_")}-${Date.now()}.png`);
+    const roofSrc = await uploadImage(await roofsToBlob(m, gs, art?.roofs), `roofs-${m.seed.replace(/[^\w-]/g, "_")}-${Date.now()}.png`);
     tiles.push({
       texture: { src: roofSrc },
       x: 0,
@@ -87,6 +92,17 @@ export async function createBattlemapScene(m: Battlemap, opts: BattlemapSceneOpt
       elevation: 20,
       occlusion: { mode: CONST.OCCLUSION_MODES.VISION, alpha: 0 },
       restrictions: { light: false, weather: true },
+    });
+  }
+  // Living scenery: fire, fireflies, flies, dust (FA animations).
+  tiles.push(...(await effectTiles(battlemapEffects(m), gs, m.seed)));
+  // Tree canopies overhead: they fade when a token walks beneath them.
+  const canopy = canopyToBlob(m, look);
+  if (canopy) {
+    const canopySrc = await uploadImage(await canopy, `canopy-${m.seed.replace(/[^\w-]/g, "_")}-${Date.now()}.webp`);
+    tiles.push({
+      texture: { src: canopySrc }, x: 0, y: 0, width: m.width * gs, height: m.height * gs, elevation: 20,
+      occlusion: { mode: CONST.OCCLUSION_MODES.FADE, alpha: 0.3 }, restrictions: { light: false, weather: true },
     });
   }
   const notes: object[] = (opts.notes ?? []).map((n) => ({
@@ -136,7 +152,18 @@ export async function createBattlemapScene(m: Battlemap, opts: BattlemapSceneOpt
     flags: { [MODULE_ID]: { seed: m.seed, kind: "battlemap", setting: m.setting } },
   });
 
-  const regions = (m.traps ?? []).flatMap((t, i) => trapRegionData(t.trap, t.cells, gs, `trap-${i}`));
+  const regions: object[] = (m.traps ?? []).flatMap((t, i) => trapRegionData(t.trap, t.cells, gs, `trap-${i}`));
+  // High ground: everyone sees the height when a token gets up there.
+  for (const [i, l] of (m.ledges ?? []).entries()) {
+    regions.push({
+      name: `High ground ${i + 1} (${l.height} ft)`,
+      color: "#a39a8c",
+      shapes: l.cells.map(([x, y]) => ({ type: "rectangle", x: x * gs, y: y * gs, width: gs, height: gs, rotation: 0, hole: false })),
+      visibility: CONST.REGION_VISIBILITY.LAYER,
+      behaviors: [{ type: "displayScrollingText", name: "Height", system: { events: ["tokenEnter"], text: `+${l.height} ft`, color: "#f5e6c8", visibility: 2, once: false } }],
+      flags: { [MODULE_ID]: { ledge: l.height } },
+    });
+  }
   if (regions.length) await scene.createEmbeddedDocuments("Region", regions);
 
   if (opts.encounter) {

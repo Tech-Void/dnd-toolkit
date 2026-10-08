@@ -390,3 +390,55 @@ function gear(rng: Rng, tier: Tier, add: (i: LootItem) => void) {
   const [name, valueGp] = rng.pick(GEAR.filter(([, , min]) => min <= tier));
   add({ name, kind: "gear", quantity: 1, valueGp });
 }
+
+// ---------------------------------------------------------------------------
+// What a furnished room holds: the armory has weapons, the library books...
+
+export type FindKind = "weapons" | "books" | "potions" | "supplies" | "coins" | "metal" | "gear";
+
+const ARMS: [string, number][] = [
+  ["Spear", 1], ["Shortsword", 10], ["Longsword", 15], ["Light Crossbow", 25], ["Crossbow Bolts", 1], ["Shield", 10], ["Handaxe", 5],
+  ["Javelin", 0.5], ["Battleaxe", 10], ["Shortbow", 25], ["Arrows", 1], ["Mace", 5], ["Warhammer", 15], ["Halberd", 20], ["Chain Shirt", 50],
+];
+
+/** A few things that belong in a room of this kind. */
+export function themedItems(kind: FindKind, partyLevel: number, seed: string | number): LootItem[] {
+  const rng = createRng(seed);
+  const t = tierForCr(partyLevel);
+  const items: LootItem[] = [];
+  const add = (i: LootItem) => addItem(items, i);
+  switch (kind) {
+    case "weapons":
+      for (const [name, valueGp] of rng.shuffle(ARMS).slice(0, rng.int(2, 4))) add({ name, kind: "gear", quantity: name.endsWith("s") ? 20 : rng.int(1, 3), valueGp: name.endsWith("s") ? 0.05 : valueGp });
+      if (t >= 2 && rng.chance(0.25)) add({ name: concretize(rng, "Weapon +1"), kind: "magic", quantity: 1, valueGp: RARITY_VALUE_GP.uncommon, rarity: "uncommon" });
+      break;
+    case "books": {
+      const book = lootBook(rng, t);
+      add({ name: bookItemName(book), kind: "book", quantity: 1, valueGp: book.valueGp, book, note: book.blurb });
+      if (rng.chance(0.4)) add(scroll(rng, t));
+      break;
+    }
+    case "potions":
+      for (let i = rng.int(1, 3); i > 0; i--) add(rng.chance(0.7) ? potion(rng, t) : scroll(rng, t));
+      break;
+    case "supplies": {
+      add({ name: "Rations (1 day)", kind: "gear", quantity: rng.roll("2d6"), valueGp: 0.5 });
+      const [name, value, dice, , note] = rng.pick(TRADE_GOODS.filter(([, , , min]) => min <= t));
+      add({ name, kind: "trade", quantity: rng.roll(dice), valueGp: value, note, material: materialTagFor(name) });
+      break;
+    }
+    case "coins": {
+      const value = [10, 50, 100, 500][t - 1]!;
+      for (let i = rng.int(2, 4); i > 0; i--) add({ name: rng.pick(GEMS[value]!), kind: "gem", quantity: 1, valueGp: value });
+      break;
+    }
+    case "metal":
+      add({ name: rng.pick(["Iron ingot", "Copper ingot", "Silver ingot"]), kind: "trade", quantity: rng.int(2, 6), valueGp: 1, material: "metal" });
+      if (rng.chance(0.4)) add({ name: "Gold ingot", kind: "trade", quantity: 1, valueGp: 50, material: "metal" });
+      break;
+    case "gear":
+      for (const [name, valueGp] of rng.shuffle(GEAR.filter(([, , min]) => min <= t)).slice(0, rng.int(2, 3))) add({ name, kind: "gear", quantity: 1, valueGp });
+      break;
+  }
+  return items;
+}

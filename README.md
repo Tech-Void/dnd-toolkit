@@ -15,6 +15,35 @@ packages/
 
 **Design rule:** generators return plain JSON (`DungeonMap`, `LootResult`, `PlotHook`). Only `packages/foundry/src/importers/` knows about Foundry. Every new feature is a core generator plus an importer.
 
+## Map art (Forgotten Adventures)
+
+Generated battlemaps, towns, dungeons and caves are painted with Forgotten Adventures art when it's installed. Without it they keep the built-in painted look.
+
+**What the art covers:**
+- **Ground:** real textures for grass, forest floor, dirt, cobbled streets, flagstones, plank floors, cave floor, rock and water.
+- **Props:** FA art for trees, bushes, boulders, logs, tents, campfires, carts, wells, tables, chairs, bars, shelves, beds, barrels, crates, chests, rugs, altars, pillars and rubble.
+- **Buildings:** timber or stone walls, and textured roofs on town buildings.
+- **Small scenery:** flowers, stones and puddles scattered on open ground.
+- **Dungeons:** clutter along the walls (crates, sacks, rubble, bones in the lair). It never covers doorways, trap triggers or loot piles.
+
+Each map picks one look per kind of thing from its seed (one tree species, one wood tone, one roof style), so it hangs together. The same seed always paints the same way.
+
+**Animated scenery** (module setting, on by default) adds FA's looping animations as video tiles:
+- **Fire:** flames in campfires, hearths, braziers and on dungeon torches.
+- **Outdoors:** fireflies over night meadows, swamps and farms.
+- **Rooms:** flies over ossuaries, larders and dens; drifting dust in libraries, storerooms and ruins; sparkles in summoning circles and on crystals.
+- **Caves:** spores in fungus groves and water dripping in caves and mines.
+
+**Tree canopies** go on their own overhead tile that fades when a token walks beneath, with matching shadows on the ground.
+
+**Setup:**
+1. Foundry serves the art from `fa-assets` inside its Data folder (`%LOCALAPPDATA%\FoundryVTT\Data\fa-assets`). Only the files the painters use (about 12,600, 0.4 GB) live there, copied from the full FA library. The folder name is the module setting *Forgotten Adventures art folder*. Clear the setting to switch the art off.
+2. `packages/foundry/static/fa-manifest.json` lists which files the painters use. It holds paths and grid sizes only, no art. After adding FA packs, rebuild it:
+
+   `python packages/foundry/scripts/build-fa-manifest.py "B:/assets for dnd/FA_Assets_Webp" "%LOCALAPPDATA%/FoundryVTT/Data/fa-assets"`
+
+   The second path is optional: with it, any newly used files are copied into the Foundry folder too.
+
 ## Dev workflow
 
 ```sh
@@ -34,7 +63,39 @@ Enable **DnD Toolkit** in your world, then click the d20 button in the Token con
 
 - **Encounter**: party level and size (or auto-detect from player characters), difficulty, shape, and **monster tags**. Click a monster's name for its statblock. *Place hidden* drops non-overlapping tokens around your view. *Place & fight* adds them to combat and rolls initiative. Click the lock next to a group to keep it, then *Generate* again to rebuild everything else around it (same seed, same result; the dice button rerolls). *Add a wave* stacks on reinforcements worth about half the budget, each arriving on a later round with *Bring in* to drop them into the running combat.
 - **Dungeon**: choose *Rooms & corridors* or *Cave*. Caves come out *mixed* (open caverns in one part, tight tunnels in another), *open* or *tight*, split into chambers of very different sizes and numbered in exploration order from the entrance. Set a **monster theme** (e.g. `goblinoid`) and how many rooms hold **monsters** (few / some / many). Encounters are spread across the map rather than bunched in neighboring rooms, and the lair gets a high-difficulty fight and a hoard. Under *Lighting & extras*: **hidden rooms** (a dead end, or a carved closet, sealed behind a Foundry secret door with treasure inside), **loot piles** (treasure stashed in a corner with a find DC, pinned as GM-only notes, plus hidden Item Piles piles when that module is active), **light sources** (none / sparse / well lit: wall torches, lair braziers and candles in dungeons; daylight at the entrance, glowing fungi, crystals and lava seams in caves), **darkness**, **global light** and **torch-bearers** (one creature in each humanoid group carries a lit torch). The preview shows a red dot where each monster will stand, gold squares for loot and purple outlines for hidden rooms and secret doors, with a room-by-room list below. *Create Scene* paints textured stone walls, makes walls, doors, secret doors, lights and darkness, and pins a room-key journal as map notes. Monsters are placed as hidden tokens away from the walls. **Locked doors** (none / a few / some / many) makes doors locked, stuck, barred or (from level 5) sealed by an arcane lock, favoring the lair and treasure rooms. Most locked doors have a key somewhere the party can reach without going through that door: carried by a room's monster (it drops with their treasure), in a loot pile, or stashed in a quiet room. Arcane locks have a password written somewhere. Keys can chain, but the dungeon can always be solved without picking or forcing anything. Each room trap gets **trigger squares** one step inside a doorway. The room key says which door is which, what opens it and where the key is. The preview shows gold dots for locked doors and red crossed squares for traps.
-- **Battlemap**: a quick one-fight map. Pick forest clearing, road ambush, cave grotto, shop, tavern, ruins or bandit camp (or random), a size, and day or night. *Create Scene* builds a painted scene with walls, doors and windows. Trees, boulders, pillars, shelves and tents block movement and sight. It also gets fire, lamp and glowing-mushroom lights, darkness for caves and night, and a battlefield-notes journal covering cover, difficult terrain and hazards. The preview marks where the party arrives (blue) and where enemies start (red). Tick the box to drop the current encounter there as hidden tokens. The Shop tab's *Battlemap* button builds that shop's floor. **Locked doors** locks shop storerooms (the shopkeeper has the key), bars back doors from inside, now and then jams a kitchen door, and locks about half the houses in a town. **Traps** hides snares, bear traps, deadfalls, caltrops and wasp nests around camps, roads and clearings, and pits, glyphs and runes in ruins and caves. They go on the ground between the party and the enemy, never on the props.
+  - **Rooms with a purpose.** *Rooms* picks a theme (*Furnished: fit the monsters* by default), or *Bare rooms* to skip it. The themes:
+    - **Bandit hideout:** barracks, mess hall, storeroom, armory, guard post, holding cells, the leader's quarters.
+    - **Fortress:** bunks, war room, kitchen and a great hall with a throne.
+    - **Crypt:** burial vaults, ossuary, chapel, embalming room, catacombs, the founder's tomb.
+    - **Mine:** galleries propped with timber, a cart depot, smelting room, tool store, collapsed tunnels, the deep vein.
+    - **Temple:** nave with pews, vestry, library, monks' cells, reliquary, ritual chamber.
+    - **Wizard's tower:** laboratory, library, study, menagerie, summoning circle, sanctum.
+    - **Natural caverns:** den, nest, larder, fungus grove, cave camp, the beast's hoard.
+
+    Each room is furnished to match, with FA art: bedrolls in the barracks, coffins in the catacombs, forges and anvils in the smelting room, bookcases in the library, cages in the cells. Doorways, trap triggers and loot stay clear. The room key's title, description and finds follow the purpose: the armory has weapons, the library a book, the laboratory potions. The room's monsters are caught doing what the room is for: asleep in the barracks, eating in the mess hall, at prayer in the nave, mid-ritual in the ritual chamber.
+  - **Puzzle** (on by default) guards the hidden room or a treasure room with a sealed door. The puzzle is in the room beside the door, and its clue is carved somewhere else in the dungeon (the room key says where, and gives the answer).
+    - **The kinds:** levers to set ("Raise the Sun and the Crown; let the Moon sleep"), pressure plates to step on in order, statues to turn until they all face the door, or runes to touch in sequence.
+    - **Playing it:** each piece is a tile on the map. A player stepping onto one is asked what they do: pull, turn left or right, touch. Plates press as soon as you step on them. Statues visibly turn and levers flip, and everyone sees what happened in chat.
+    - **Getting it wrong:** a wrong order resets everything and costs something, a dart volley or a discharge, with save and damage buttons for you.
+    - **Solving it:** the sealed door (or the secret door) opens.
+- **Battlemap**: a quick one-fight map. Pick forest clearing, road ambush, cave grotto, shop, tavern, ruins or bandit camp (or random), a size, and day or night. *Create Scene* builds a painted scene with walls, doors and windows. Trees, boulders, pillars, shelves and tents block movement and sight. It also gets fire, lamp and glowing-mushroom lights, darkness for caves and night, and a battlefield-notes journal covering cover, difficult terrain and hazards. The preview marks where the party arrives (blue) and where enemies start (red). Tick the box to drop the current encounter there as hidden tokens. The Shop tab's *Battlemap* button builds that shop's floor.
+  - **More settings:**
+    - **Graveyard:** rows of headstones, open graves, statues, a mausoleum.
+    - **Temple:** pews, an altar and pillars.
+    - **Docks:** piers, rowboats, a warehouse and deep water.
+    - **River bridge:** a fast river, reeds and the bridge as a choke point.
+    - **Mine:** timber props, carts and lanterns.
+    - **Farmstead:** a farmhouse, a barn with hay, and a fenced field of crops.
+    - **Swamp:** mud, pools, dead trees, reeds, sometimes a stilt hut.
+
+    Travel days in swamps now fight in a swamp.
+  - **Elevation** raises a ledge, outcrop or dais (5 to 15 ft) on many maps. Its cliff edges block movement but not sight: climbing is an Athletics check, and a slope leads up. "+10 ft" floats up when a token reaches the top. Enemies like to hold the high ground.
+  - **Fight** sets up the layout:
+    - **Standoff:** the party on one side, the enemy on the other.
+    - **Ambush:** the enemy is hidden behind cover close in on both flanks.
+    - **Hold the line:** the party defends the middle behind makeshift barricades while attackers come from the edges.
+    - **Random:** any of the three.
+  - **Locked doors** locks shop storerooms (the shopkeeper has the key), bars back doors from inside, now and then jams a kitchen door, and locks about half the houses in a town. **Traps** hides snares, bear traps, deadfalls, caltrops and wasp nests around camps, roads and clearings, and pits, glyphs and runes in ruins and caves. They go on the ground between the party and the enemy, never on the props.
 - **Forge**: one-of-a-kind magic items in seconds. Pick a kind (weapon, armor or shield, wondrous item, wand/staff/rod, or a relic with history and a drawback), a rarity (or let the party level decide), a damage theme (fire, cold, necrotic, radiant...) and optionally a base ("Greataxe", "ring", "staff"). Forge up to 10 at once, with curses never, sometimes or always. Each card has a **Curse / Lift curse** toggle, and the Loot tab and the dungeon extras have their own curse setting for unique hoard items. A curse is a nasty property and sometimes a penalty effect (a vulnerability, or -1 to saves or AC). Cursed items are created **unidentified**: players see a plain "Fine Longsword" with only its good properties until you identify it on the sheet. Weapons can roll keen (19-20 crits), vicious (extra crit dice), bane (bonus damage against a creature type, on the item's other-formula button) and combat riders. Worn items draw from about 35 effects: AC, saves, checks, initiative, resistances and immunities, darkvision, blindsight and tremorsense, flying, swimming and climbing speeds, attack and damage bonuses, spell DC, hit points, and ability scores. Powers are blasts, spell-attack bolts, healing or utilities like Blink Step and Haste. Relics may be sentient. **Edit** any item, or start from **New blank item**, and change every field: name, kind, base, rarity, value, bonus, attunement, curse, extra damage, crit range and dice, bane, effect rows (pick from the catalog or type any custom key), the power (kind, charges, recharge, save and DC, damage, area, range), appearance, notes and lore. The description is rebuilt from the numbers, so it never goes stale. Each comes with a name, appearance, properties scaled to its rarity, and a price. *Create item* or *Give to selected* builds a working dnd5e item with no formula editing: the magic bonus, extra damage on hit, charges that recover at dawn, a save DC and damage for its power (one click to roll it), and Active Effects (AC, saves, resistance, speed, darkvision, ability scores...) that switch on when attuned. Weapons and armor are copies of the real compendium item. Tick *Unique items* on the Loot tab, or in the dungeon's extras, and hoard magic items are forged too; giving loot or creating Item Piles piles builds them the same way. The Forge also makes **potions, elixirs, oils and philters**: healing, temporary effects (applied to the drinker from the chat card, with a duration), breath weapons, or utility effects such as walking on water, mist form or second sight. It makes **scrolls**, which hold one use of a blast, bolt, heal or utility power, need no spellcasting and crumble afterward. It makes **ammunition**: stacks of arrows, bolts, bullets or needles with a bonus, extra damage, riders such as bursting, seeking or knockdown, and slaying shots at high rarity. These come out as single-use dnd5e consumables. Curses work on them too: tainted potions, scrolls that bite back, ammunition that veers toward allies.
 - **Doors and traps on the map** (automatic on generated scenes):
   - **Doors.** A locked, stuck or barred door starts *locked* in Foundry. When a player clicks it, they get a prompt for their selected character: *use the key* (if they carry it), *speak the password*, *pick the lock* (rolls their thieves' tools), or *force it* / *break it down* (rolls Athletics). The DC stays hidden. On a success the door unlocks, or bursts open if forced. A forced attempt that fails by 5 or more is noisy. You get a GM-only line in chat either way. GM pins (padlocks) on each locked door link to the room key.
@@ -42,6 +103,28 @@ Enable **DnD Toolkit** in your world, then click the d20 button in the Token con
   - **Spotting traps.** Around each trap is a one-square warning ring. A character whose passive Perception (or Investigation, for magical traps) beats the trap's DC stops at the edge of the ring and spots it. Chat says what they noticed and the trap appears on the map. The trigger stays live until it's disarmed or avoided.
   - **Sneaking past.** Tokens you move as GM (monsters, or players' tokens) never set anything off.
   - **Setup.** Needs the module socket, so restart Foundry once after updating.
+- **Camp & downtime** (Downtime). Players open **Camp** and **Projects & Downtime** from the token controls; you start camp from the toolkit's *Camp & Projects* tab, or with the *Camp* button on a travel day. The day counter only moves when the party breaks camp or you grant downtime days. There's no running clock.
+  - **Making camp.** Everyone's screen gets the same camp window, in four phases:
+    1. **Choose a spot.** Two or three sites for the terrain (a rock overhang, an oasis, a barrow mound), each with shelter, water and hidden tags, a perk and a risk. Players vote and you pick.
+    2. **Set up camp.** Light a fire or don't: hot food and songs, but it can be seen. Players drag their portrait onto a job, or click it and then the job, and roll from their own sheet. The jobs: cook (temporary hit points for everyone), forage (food and herbs for brewing), hunt (meat and hides), tend wounds (an ally gets an extra Hit Die), mend gear, set alarms (the watch has advantage and the camp can't be surprised), scout (fewer surprises, plus a hint of what's coming), pray, stories and songs (an ally wakes inspired), search the site, turn in early, or two hours on a downtime project. DCs change with the site, the weather and the fire. Players drag their portraits between watches.
+    3. **The night.** You reveal it watch by watch. Visitors, thieves, omens, weather turns, false alarms or an ambush land in a particular watch. Whoever is on that watch rolls (an Insight check for a visitor, Arcana for an omen), and everyone rolls the save in a storm. An ambush opens in the Encounter tab, or as a night camp battlemap with the fight ready to place.
+    4. **Morning.** Everyone's gains, a suggested rest (full, broken or none) with warnings about cold or a fight, and one click to apply the rest, temporary HP, inspiration, extra Hit Dice, food, herbs, meat, finds and project hours. It posts a morning report to chat and the Journey Log.
+  - **Food (optional).** Tick *Track food* and each camper eats a ration, foragers and hunters bring more in, and the window warns when someone will go hungry.
+  - **Projects.** Every character's downtime projects are progress bars, with a marker at each check along the way.
+    - **Kinds.** Players propose: read a book from their pack, train a tool, language or skill, craft something, research a question, or anything else.
+    - **Approval.** You approve with the hours, the check DC and a note (or *Fast ×½* / *Slow ×1½*). Gold and materials are taken on approval.
+    - **Progress.** Camp gives two hours an evening, and *Grant downtime days* gives 8 hours a day to each character's starred project.
+    - **Checks.** At each check, progress stops until the player rolls from their sheet. A success is a breakthrough (+10%, or +20% beating the DC by 5). A failure is a setback, and a bad crafting failure also ruins materials. Every step is logged.
+    - **Rewards.** Finishing one hands out the reward: proficiency or expertise on the sheet, the crafted item in the pack, spells copied into a wizard's spellbook, or a lore book's secret whispered to the reader.
+  - **Skill books** turn up in treasure: a practical treatise on thieves' tools, a primer of Draconic, the Ranger's Almanac. Once a character has read one, training that subject goes 25% faster (two different books, 50%). Lore books hold a secret, and wizards' workbooks hold spells.
+  - **Crafting.** It uses what the party harvests. About 25 recipes (potions of healing from herbs, hide armor from pelts, a scaled shield, arrows, antitoxin, alchemist's fire, spell scrolls, trail rations, trophy charms) check the right tool and pull the materials from the pack automatically. Anything else follows the general rule: half its price, 10 gp of work a day. A magic item takes workweeks by rarity, plus a rare ingredient harvested from a creature of high enough CR. Forge items have a *Craft as a project* button.
+- **Campaign** (Story): the world's memory.
+  - **Factions:** where the party stands with each, from hostile to devoted, with why it changed. Helping a faction annoys its rivals.
+  - **People:** everyone they've met and what happened each time, with *Brief me* to whisper yourself the NPC's memory before a scene.
+  - **Places, quests and a log:** quests have steps and a status, and everything leaves a dated line in the log.
+  - **Adding things:** *Remember* on the NPC tab, *Add to campaign* on a settlement, and *Track quest* / *Track in campaign* on plot hooks and side quests. Tracking a side quest ties it into the world: the villain works for a faction the party has crossed (or a new one), and friends they already know become the patron and contacts.
+  - **Plot hooks:** with *Use campaign people*, new hooks cast known friends as patrons and known enemies as villains.
+  - **Quest Log:** the players get a journal of active and finished quests and faction standing, which updates itself and never shows your notes.
 - **Settlement** (World): a hamlet, village, town or city to arrive in.
   - **People and places:** a name and population, a few lines of character (looks, what it's known for, the mood), who runs it, notable folk with secrets, an inn (keeper, specialty, room price, a feature), a temple (deity, priest), and 1–7 shops with stock and keepers.
   - **Story hooks:** factions with goals and leaders, the local trouble (one click makes it a side quest), and rumors.
@@ -53,6 +136,9 @@ Enable **DnD Toolkit** in your world, then click the d20 button in the Token con
   - **Each day:** weather with its rules effect, miles made good (rough ground and storms slow you), a navigation DC off-road, a foraging DC, and one event. Events are a quiet day, an encounter (with the time it strikes and a Perception check for the watch), a hazard with its save or check (river fords, rockslides, sinkholes, sandstorms, thin ice…), a discovery that can become a side quest, or a meeting on the road.
   - **Buttons:** every check opens a roll request; encounters open in the Encounter tab or straight onto a matching battlemap with the fight ready to place; 🎲 rerolls a day; *Travel log* writes the trip to a journal.
 - **Combat helpers** (automatic, each can be switched off in module settings): fights placed by the toolkit are tracked.
+  - **Monster turn cards:** on each monster's turn you get a whispered card with its HP and what it does. The advice comes from its role, wits and wounds: the archer goes for the spellcaster, the skirmisher picks off the wounded and gets out, the wolf bolts when hurt, the cornered mage bargains, a breath weapon that's recharged goes first. One-click buttons roll each of its attacks and abilities, and another rolls a recharge.
+  - **Legendary and lair actions:** legendary actions are offered at the end of every other creature's turn, with the cost spent for you, and refresh on the monster's own turn. At the top of each round, a boss fighting in its lair gets its lair actions. Bosses without any get three generated ones to choose from, by creature type with a DC from their CR.
+  - **Surrender:** when morale breaks, a creature can surrender. It leaves the fight and tells you what it knows, and what it wants in return.
   - **Morale:** when a leader falls or half the group is down, you get a card to roll morale (Wisdom DC 10); those who fail flee, frightened.
   - **Waves:** reinforcements announce themselves on their round, with a button to bring them in.
   - **Loot:** with Item Piles, the fallen become lootable piles. When the last foe drops you get the fight's treasure, to drop as a pile or give to a token.

@@ -58,6 +58,18 @@ import {
   type DamageType,
   type Rarity,
   addHiddenRooms,
+  placePuzzle,
+  bindHook,
+  bindSideQuest,
+  fromTown,
+  npcRecord,
+  questFromHook,
+  register,
+  type FightLayout,
+  DUNGEON_THEMES,
+  furnishDungeon,
+  type DungeonTheme,
+  newCamp,
   AMMO_FORMS,
   CONSUMABLE_KINDS,
   CREATURE_TYPES,
@@ -116,11 +128,17 @@ import {
 } from "@dnd-toolkit/core";
 import { drawDungeon, drawDungeonOverlay, drawInteractiveMarks } from "./render.ts";
 import { drawBattlemap } from "./render-battlemap.ts";
+import { battlemapArt, dungeonArt, type DungeonArt, type MapArt } from "./fa-assets.ts";
 import { createBattlemapScene } from "./importers/battlemap.ts";
 import { createNpcActor, npcHtml, placeNpcToken } from "./importers/npc.ts";
 import { createForgedItem, forgedHtml, giveForgedItems } from "./importers/forge.ts";
 import { addParsedToActor, createParsedItems, parsedHtml } from "./importers/parsed.ts";
 import { createStatblockActor } from "./importers/statblock.ts";
+import { CampApp } from "./camp-app.ts";
+import { getCampaign, saveCampaign, updateCampaign } from "./campaign-store.ts";
+import { bindCampaignInputs, campaignAction, campaignHtml, type CampaignView } from "./campaign-ui.ts";
+import { currentDay, getCamp, startCamp } from "./downtime.ts";
+import { ProjectsApp } from "./projects-app.ts";
 import { ABILITIES, partyActors, passives, requests, rollForThem, rollLabel, sendRollRequest, SKILLS, summarize, type RollRequest } from "./rolls.ts";
 import { journeyHtml, sideQuestHtml } from "./importers/journal.ts";
 import { createTownJournal, createTownScene } from "./importers/town.ts";
@@ -136,9 +154,20 @@ import { esc, MODULE_ID } from "./util.ts";
 
 const { ApplicationV2 } = foundry.applications.api;
 
-export type Tab = "encounter" | "dungeon" | "battlemap" | "loot" | "forge" | "import" | "shop" | "npc" | "hook" | "sidequest" | "rolls" | "town" | "travel" | "traps" | "handouts";
+export type Tab = "encounter" | "dungeon" | "battlemap" | "loot" | "forge" | "import" | "shop" | "npc" | "hook" | "sidequest" | "rolls" | "town" | "travel" | "traps" | "handouts" | "camp" | "campaign";
 
 interface FormState {
+  camp: {
+    seed: string;
+    terrain: Terrain;
+    climate: Climate;
+    season: Season;
+    frequency: "rare" | "normal" | "frequent";
+    foes: string;
+    food: boolean;
+    /** Characters left out of camp. */
+    away: string;
+  };
   encounter: {
     seed: string;
     level: number;
@@ -167,6 +196,10 @@ interface FormState {
     curse: CurseChance;
     shift: string;
     locks: LockAmount;
+    /** Rooms with a purpose: a theme, or "none" for bare rooms. */
+    theme: DungeonTheme | "auto" | "none";
+    /** A lever, plate, statue or rune puzzle that opens a sealed door. */
+    puzzle: boolean;
     lighting: LightAmount;
     /** Scene darkness in percent. */
     darkness: number;
@@ -189,6 +222,9 @@ interface FormState {
     traps: boolean;
     /** Lock storerooms, back doors and houses. */
     locks: boolean;
+    /** Raised ledges and outcrops. */
+    elevation: boolean;
+    layout: FightLayout | "random";
   };
   loot: { seed: string; cr: number; mode: LootMode; forge: boolean; curse: CurseChance; theme: string };
   import: { seed: string; text: string; kind: ParsedKind | "statblock" | "auto" };
@@ -225,7 +261,7 @@ interface FormState {
     /** Set by the Shop tab's "Keeper as NPC". */
     fixed: { name: string; race: string; personality: string; quirk: string; occupation: string } | null;
   };
-  hook: { seed: string; level: number; tone: HookTone };
+  hook: { seed: string; level: number; tone: HookTone; campaign: boolean };
 }
 
 const QUICK_TAGS: [string, string[]][] = [
@@ -263,8 +299,9 @@ const NAV: [group: string, color: string, tabs: [Tab, string, string][]][] = [
   ["Maps", "#3a7a5c", [["dungeon", "Dungeon", "fa-dungeon"], ["battlemap", "Battlemap", "fa-map-location-dot"]]],
   ["World", "#8a6a3a", [["town", "Settlement", "fa-city"], ["travel", "Travel", "fa-route"]]],
   ["Treasure", "#b8862b", [["loot", "Loot", "fa-coins"], ["forge", "Forge", "fa-hammer"], ["shop", "Shop", "fa-store"]]],
-  ["Story", "#6a4c9c", [["hook", "Plot Hook", "fa-scroll"], ["sidequest", "Side Quest", "fa-signs-post"]]],
+  ["Story", "#6a4c9c", [["hook", "Plot Hook", "fa-scroll"], ["sidequest", "Side Quest", "fa-signs-post"], ["campaign", "Campaign", "fa-landmark-flag"]]],
   ["At the table", "#2f8a8a", [["rolls", "Roll Requests", "fa-dice-d20"], ["traps", "Traps & Puzzles", "fa-skull-crossbones"], ["handouts", "Handouts", "fa-scroll"]]],
+  ["Downtime", "#7a5a2f", [["camp", "Camp & Projects", "fa-campground"]]],
   ["Tools", "#3d6a94", [["import", "Import", "fa-paste"]]],
 ];
 
@@ -322,6 +359,13 @@ export class ToolkitApp extends ApplicationV2 {
       travelReroll: ToolkitApp.#onTravelReroll,
       travelJournal: ToolkitApp.#onTravelJournal,
       travelChat: ToolkitApp.#onTravelChat,
+      travelCamp: ToolkitApp.#onTravelCamp,
+      makeCamp: ToolkitApp.#onMakeCamp,
+      openCamp: () => CampApp.open(),
+      openProjects: () => ProjectsApp.open(),
+      forgeCraft: ToolkitApp.#onForgeCraft,
+      campaign: ToolkitApp.#onCampaign,
+      campTrack: ToolkitApp.#onCampTrack,
       townShop: ToolkitApp.#onTownShop,
       townTrouble: ToolkitApp.#onTownTrouble,
       townScene: ToolkitApp.#onTownScene,
@@ -437,9 +481,9 @@ export class ToolkitApp extends ApplicationV2 {
       encounter: { seed: "", level: party.level, size: party.size, difficulty: "moderate", template: "auto", tags: "", source: hasActorPacks ? "compendium" : "srd", loot: true },
       dungeon: {
         seed: "", style: "dungeon", width: 40, height: 30, rooms: 12, openness: "mixed", level: party.level, size: party.size, tags: "",
-        monsters: "some", hidden: true, piles: true, unique: false, curse: "sometimes", shift: "0", locks: "some", lighting: "sparse", darkness: 85, globalLight: false, torches: true, place: true, name: "",
+        monsters: "some", hidden: true, piles: true, unique: false, curse: "sometimes", shift: "0", locks: "some", theme: "auto", puzzle: true, lighting: "sparse", darkness: 85, globalLight: false, torches: true, place: true, name: "",
       },
-      battlemap: { seed: "", setting: "random", size: "medium", night: false, name: "", place: true, shopName: "", traps: true, locks: true },
+      battlemap: { seed: "", setting: "random", size: "medium", night: false, name: "", place: true, shopName: "", traps: true, locks: true, elevation: true, layout: "standoff" },
       loot: { seed: "", cr: party.level, mode: "hoard", forge: false, curse: "never", theme: "" },
       import: { seed: "", text: "", kind: "auto" },
       town: { seed: "", size: "village", name: "", level: party.level, night: false },
@@ -448,10 +492,11 @@ export class ToolkitApp extends ApplicationV2 {
       travel: { seed: "", from: "", to: "", days: 3, terrain: "road", climate: "temperate", season: "summer", pace: "normal", level: party.level, size: party.size, foes: "", frequency: "normal", shift: "0" },
       sidequest: { seed: "", mode: "premade", archetype: "", keyword: "", level: party.level, size: party.size, tone: "any", length: 3, foes: "", boss: "", shift: "0" },
       rolls: { seed: "", prompt: "", roll: "skill:prc", dc: 13, showDc: false, advantage: "normal", rollMode: "publicroll" },
+      camp: { seed: "", terrain: "forest", climate: "temperate", season: "summer", frequency: "normal", foes: "", food: false, away: "" },
       forge: { seed: "", curse: "never", kind: "random", rarity: "auto", theme: "random", base: "", level: party.level, count: 1 },
       shop: { seed: "", type: "general", settlement: "town" },
       npc: { seed: "", role: "random", race: "random", fixed: null },
-      hook: { seed: "", level: party.level, tone: "any" },
+      hook: { seed: "", level: party.level, tone: "any", campaign: true },
     };
   }
 
@@ -460,7 +505,7 @@ export class ToolkitApp extends ApplicationV2 {
   async _renderHTML() {
     const ribbon = (id: Tab, label: string, icon: string) =>
       `<button type="button" class="dt-ribbon ${this.tab === id ? "active" : ""}" data-action="switchTab" data-tab="${id}"><i class="fa-solid ${icon}"></i><span>${label}</span></button>`;
-    const body = { encounter: () => this.#encounterHtml(), dungeon: () => this.#dungeonHtml(), battlemap: () => this.#battlemapHtml(), loot: () => this.#lootHtml(), forge: () => this.#forgeHtml(), import: () => this.#importHtml(), sidequest: () => this.#sideQuestHtml(), town: () => this.#townHtml(), travel: () => this.#travelHtml(), traps: () => this.#trapsHtml(), handouts: () => this.#handoutsHtml(), rolls: () => this.#rollsHtml(), shop: () => this.#shopHtml(), npc: () => this.#npcHtml(), hook: () => this.#hookHtml() }[this.tab]();
+    const body = { encounter: () => this.#encounterHtml(), dungeon: () => this.#dungeonHtml(), battlemap: () => this.#battlemapHtml(), loot: () => this.#lootHtml(), forge: () => this.#forgeHtml(), import: () => this.#importHtml(), sidequest: () => this.#sideQuestHtml(), town: () => this.#townHtml(), travel: () => this.#travelHtml(), camp: () => this.#campHtml(), campaign: () => campaignHtml(this.#campView, this.#campFilter), traps: () => this.#trapsHtml(), handouts: () => this.#handoutsHtml(), rolls: () => this.#rollsHtml(), shop: () => this.#shopHtml(), npc: () => this.#npcHtml(), hook: () => this.#hookHtml() }[this.tab]();
     const groups = NAV.map(([group, color, tabs]) => `
       <div class="dt-group" style="--ribbon: ${color}">
         <h4>${group}</h4>
@@ -476,17 +521,44 @@ export class ToolkitApp extends ApplicationV2 {
   _onRender() {
     const canvasEl = this.element.querySelector("canvas.dt-preview") as HTMLCanvasElement | null;
     if (canvasEl && this.dungeon) {
-      drawDungeon(canvasEl, this.dungeon.map, { cell: 12, labels: true, lights: this.dungeon.lights });
-      drawDungeonOverlay(canvasEl, this.dungeon.map, this.dungeon.keys, 12);
+      const d = this.dungeon;
+      const paint = (art: DungeonArt | null) => {
+        drawDungeon(canvasEl, d.map, { cell: 12, labels: true, lights: d.lights, art, keys: d.keys });
+        drawDungeonOverlay(canvasEl, d.map, d.keys, 12);
+      };
+      paint(null);
+      dungeonArt(d.map, d.keys).then((art) => art && this.dungeon === d && canvasEl.isConnected && paint(art));
     }
     const handoutCanvas = this.element.querySelector("canvas.dt-handout-preview") as HTMLCanvasElement | null;
     if (handoutCanvas && this.handout) drawHandout(handoutCanvas, this.handout);
     const townCanvas = this.element.querySelector("canvas.dt-town-preview") as HTMLCanvasElement | null;
-    if (townCanvas && this.town) drawBattlemap(townCanvas, this.town.map, { cell: 12, roofs: true, labels: true });
+    if (townCanvas && this.town) {
+      const t = this.town;
+      drawBattlemap(townCanvas, t.map, { cell: 12, roofs: true, labels: true });
+      battlemapArt(t.map).then((art) => art && this.town === t && townCanvas.isConnected
+        && drawBattlemap(townCanvas, t.map, { cell: 12, roofs: true, labels: true, textures: art.textures, props: art.props, treeShadows: art.treeShadows, decor: art.decor, roofArt: art.roofs, wallArt: art.walls, lightArt: art.lights }));
+    }
     const bmCanvas = this.element.querySelector("canvas.dt-bm-preview") as HTMLCanvasElement | null;
     if (bmCanvas && this.battlemap) {
-      drawBattlemap(bmCanvas, this.battlemap, { cell: 20, preview: true });
-      drawInteractiveMarks(bmCanvas.getContext("2d")!, (this.battlemap.traps ?? []).map((t) => t.cells), this.battlemap.walls, 20);
+      const m = this.battlemap;
+      const paint = (art: MapArt | null) => {
+        drawBattlemap(bmCanvas, m, { cell: 20, preview: true, textures: art?.textures, props: art?.props, treeShadows: art?.treeShadows, decor: art?.decor, wallArt: art?.walls, lightArt: art?.lights });
+        drawInteractiveMarks(bmCanvas.getContext("2d")!, (m.traps ?? []).map((t) => t.cells), m.walls, 20);
+      };
+      paint(null);
+      battlemapArt(m).then((art) => art && this.battlemap === m && bmCanvas.isConnected && paint(art));
+    }
+
+    if (this.tab === "campaign") bindCampaignInputs(this.element, () => this.render(), (v) => (this.#campFilter = v));
+    for (const box of this.element.querySelectorAll("input[data-camper]") as NodeListOf<HTMLInputElement>) {
+      box.addEventListener("change", () => {
+        const away = new Set(this.form.camp.away.split(",").filter(Boolean));
+        if (box.checked) away.delete(box.dataset.camper!);
+        else away.add(box.dataset.camper!);
+        this.form.camp.away = [...away].join(",");
+        const hidden = this.element.querySelector('input[data-group="camp"][name="away"]') as HTMLInputElement | null;
+        if (hidden) hidden.value = this.form.camp.away;
+      });
     }
 
     // Fields that change what else the form shows re-render it straight away.
@@ -642,7 +714,7 @@ export class ToolkitApp extends ApplicationV2 {
     const f = this.form.dungeon;
     const num = (name: "width" | "height" | "rooms", label: string, min: number, max: number) =>
       this.#field("dungeon", name, label, `<input type="number" min="${min}" max="${max}" value="${f[name]}">`);
-    const check = (name: "hidden" | "piles" | "unique" | "globalLight" | "torches" | "place", label: string, title: string) =>
+    const check = (name: "hidden" | "piles" | "unique" | "globalLight" | "torches" | "place" | "puzzle", label: string, title: string) =>
       `<label class="dt-check" title="${esc(title)}"><input type="checkbox" data-group="dungeon" name="${name}" ${f[name] ? "checked" : ""}> ${label}</label>`;
     const d = this.dungeon;
     const cave = f.style === "cave";
@@ -664,10 +736,12 @@ export class ToolkitApp extends ApplicationV2 {
           ${this.#select("dungeon", "curse", "Cursed unique items", [["never", "Never"], ["sometimes", "Sometimes"], ["always", "Always"]], f.curse)}
           ${this.#select("dungeon", "shift", "Fights", [["-1", "Easier"], ["0", "Standard"], ["1", "Harder"]], f.shift)}
           ${cave ? "" : this.#select("dungeon", "locks", "Locked doors", [["none", "None"], ["few", "A few"], ["some", "Some"], ["many", "Many"]], f.locks)}
+          ${this.#select("dungeon", "theme", "Rooms", [["auto", "Furnished: fit the monsters"], ...(Object.entries(DUNGEON_THEMES) as [DungeonTheme, { label: string }][]).map(([v, t]): [string, string] => [v, `Furnished: ${t.label}`]), ["none", "Bare rooms"]], f.theme)}
         </div>
         <div class="dt-checks">
           ${check("hidden", "Hidden rooms", "Seal a dead-end room or two behind secret doors, with treasure inside")}
           ${check("piles", "Loot piles", "Stash treasure in findable piles with a DC, pinned as GM-only notes (and hidden Item Piles piles if installed)")}
+          ${check("puzzle", "Puzzle", "A lever, pressure-plate, statue or rune puzzle that opens a sealed door (or the hidden room), with its clue carved in another room")}
           ${check("unique", "Unique items", "Hoards hold one-of-a-kind items from the Forge instead of standard magic items")}
           ${check("torches", "Torch-bearers", "One creature in each humanoid group carries a lit torch")}
           ${check("globalLight", "Global light", "Light the whole scene regardless of darkness")}
@@ -710,6 +784,8 @@ export class ToolkitApp extends ApplicationV2 {
         ${this.#select("battlemap", "size", "Size", sizes, f.size)}
         <label class="dt-check"><input type="checkbox" data-group="battlemap" name="night" ${f.night ? "checked" : ""}> Night</label>
         <label class="dt-check" title="Snares and pits in camps, on roads and in ruins and caves: they stop a token, pause the game and give you the rolls"><input type="checkbox" data-group="battlemap" name="traps" ${f.traps ? "checked" : ""}> Traps</label>
+        ${this.#select("battlemap", "layout", "Fight", [["standoff", "Standoff"], ["ambush", "Ambush (hidden close)"], ["defend", "Hold the line"], ["random", "Random"]], f.layout)}
+        <label class="dt-check" title="Raised ledges, outcrops and daises with cliff edges: climb them or take the slope"><input type="checkbox" data-group="battlemap" name="elevation" ${f.elevation ? "checked" : ""}> Elevation</label>
         <label class="dt-check" title="Storerooms, back doors and houses can be locked, stuck or barred; players clicking one get to pick, force or unlock it"><input type="checkbox" data-group="battlemap" name="locks" ${f.locks ? "checked" : ""}> Locked doors</label>
       </div>
       ${this.#seedRow("battlemap")}
@@ -802,6 +878,7 @@ export class ToolkitApp extends ApplicationV2 {
         <div class="dt-row dt-actions">
           <button type="button" data-action="forgeCreate" data-index="${i}" title="Create it in the Items sidebar and open its sheet"><i class="fa-solid fa-plus"></i> Create item</button>
           <button type="button" data-action="forgeGive" data-index="${i}" title="Add it to the selected token's (or your character's) inventory"><i class="fa-solid fa-hand-holding"></i> Give to selected</button>
+          <button type="button" data-action="forgeCraft" data-index="${i}" title="Have a character craft it as a downtime project (rare ingredient, gold and weeks of work)"><i class="fa-solid fa-hammer"></i> Craft as a project</button>
           <button type="button" data-action="forgeEdit" data-index="${i}" title="Change anything: name, numbers, effects, power, notes"><i class="fa-solid fa-pen"></i> Edit</button>
           <button type="button" data-action="forgeCurse" data-index="${i}" title="${it.cursed ? "Remove the curse" : "Add a random curse; the item is created unidentified, disguised as harmless"}"><i class="fa-solid fa-${it.cursed ? "hand-sparkles" : "skull"}"></i> ${it.cursed ? "Lift curse" : "Curse"}</button>
         </div>
@@ -1117,6 +1194,7 @@ export class ToolkitApp extends ApplicationV2 {
           ${d.event.encounter ? `<button type="button" data-action="travelFight" data-day="${d.id}"><i class="fa-solid fa-dragon"></i> Encounter</button>
             <button type="button" data-action="travelMap" data-day="${d.id}" title="A ${esc(d.event.encounter.map)} battlemap with the fight ready to place"><i class="fa-solid fa-map"></i> Battlemap</button>` : ""}
           ${d.event.questKeyword ? `<button type="button" data-action="travelQuest" data-day="${d.id}" title="Turn this discovery into a side quest"><i class="fa-solid fa-signs-post"></i> Side quest</button>` : ""}
+          <button type="button" data-action="travelCamp" title="Make camp for the night here: the terrain, climate and season carry over"><i class="fa-solid fa-campground"></i> Camp</button>
           <button type="button" data-action="travelReroll" data-day="${d.id}" title="Reroll this day"><i class="fa-solid fa-dice"></i></button>
         </div>
       </div>`;
@@ -1188,6 +1266,7 @@ export class ToolkitApp extends ApplicationV2 {
         <div class="dt-row dt-actions">
           <button type="button" data-action="townScene" title="The town map with roofs, plus pins on every named building linked to the town journal"><i class="fa-solid fa-map"></i> Create town scene</button>
           <button type="button" data-action="townJournal"><i class="fa-solid fa-book"></i> Journal only</button>
+          <button type="button" data-action="campTrack" data-what="town" title="Remember the town, its leader, notables and factions in the campaign"><i class="fa-solid fa-landmark-flag"></i> Add to campaign</button>
         </div>
         <p class="dt-hint">Roofs sit on an overhead layer: players see inside a building once they can see through its door or windows. Every shop also has a full interior battlemap via Shop → Battlemap.</p>`
       : `<p class="dt-empty">Generate a place to arrive in: who runs it, where to drink, buy and pray, who's scheming and what's wrong, with a map of every building.</p>`}`;
@@ -1252,6 +1331,7 @@ export class ToolkitApp extends ApplicationV2 {
         ${q.missions.map(missionCard).join("")}
         <div class="dt-row dt-actions">
           <button type="button" data-action="questJournal"><i class="fa-solid fa-book"></i> Journal (whole quest)</button>
+          <button type="button" data-action="campTrack" data-what="sidequest" title="Tie it into the campaign: the villain works for a faction the party has crossed (or a new one), known friends become the patron and contacts, and the quest goes in the Quest Log"><i class="fa-solid fa-landmark-flag"></i> Track in campaign</button>
           <button type="button" data-action="questChat"><i class="fa-solid fa-comment"></i> Chat (GM)</button>
         </div>`
       : `<p class="dt-empty">When the table wanders off the main road. Pick a quest type (bandit hideout, dragon hunt, cult ritual…), type a keyword ("silver serpent" becomes a silver dragon in an icy lair, and the same keyword always gives the same quest), or go fully random. One villain, one prize and one lair run through every mission, each with a map seed, a themed fight, checks and rewards ready to build out.</p>`}`;
@@ -1321,6 +1401,7 @@ export class ToolkitApp extends ApplicationV2 {
           <button type="button" data-action="npcToken" title="Create the actor (once) and drop its token at the center of your view"><i class="fa-solid fa-location-dot"></i> Place token</button>
           <button type="button" data-action="npcChat"><i class="fa-solid fa-comment"></i> Chat (GM)</button>
           <button type="button" data-action="npcJournal"><i class="fa-solid fa-book"></i> Journal</button>
+          <button type="button" data-action="campTrack" data-what="npc" title="Remember them in the campaign: the party's met them"><i class="fa-solid fa-landmark-flag"></i> Remember</button>
         </div>`
       : `<p class="dt-empty">Pick a role (or leave it random) and generate someone to talk to.</p>`}`;
   }
@@ -1339,6 +1420,7 @@ export class ToolkitApp extends ApplicationV2 {
         ${this.#field("hook", "level", "Party level", `<input type="number" min="1" max="20" value="${f.level}">`)}
         ${this.#select("hook", "tone", "Tone", tones, f.tone)}
       </div>
+      <label class="dt-check" title="Make the patron someone the party likes and the villain someone they've crossed (from the Campaign tab), when there's anyone"><input type="checkbox" data-group="hook" name="campaign" ${f.campaign ? "checked" : ""}> Use campaign people</label>
       ${this.#seedRow("hook")}
       <div class="dt-row"><button type="button" data-action="hookBlank" title="Write your own from empty fields"><i class="fa-solid fa-file-circle-plus"></i> Blank hook</button></div>
       ${h ? `
@@ -1359,6 +1441,7 @@ export class ToolkitApp extends ApplicationV2 {
         <div class="dt-row dt-actions">
           <button type="button" data-action="hookChat"><i class="fa-solid fa-comment"></i> Post to chat (GM)</button>
           <button type="button" data-action="hookJournal"><i class="fa-solid fa-book"></i> Journal</button>
+          <button type="button" data-action="campTrack" data-what="hook" title="Add it to the campaign's quests (and the players' Quest Log)"><i class="fa-solid fa-landmark-flag"></i> Track quest</button>
         </div>`
       : `<p class="dt-empty">Generate an adventure hook, then tweak any part by hand or reroll just that part.</p>`}`;
   }
@@ -1414,13 +1497,20 @@ export class ToolkitApp extends ApplicationV2 {
         });
         // Locks and keys (caves have no doors to lock).
         if (f.style !== "cave") ({ map, keys } = lockDoors(map, keys, { amount: f.locks, partyLevel: f.level }));
+        // Rooms with a purpose: barracks, ossuaries, laboratories..., furnished to match.
+        if (f.theme !== "none") keys = furnishDungeon(map, keys, { theme: f.theme, partyLevel: f.level, tags: f.tags, lootPiles: f.piles }).keys;
+        // A puzzle guarding the hidden room or a treasure room, with its clue elsewhere.
+        if (f.puzzle) {
+          const pz = placePuzzle(map, keys, { partyLevel: f.level });
+          if (pz) ({ map, keys } = pz);
+        }
         this.#remember(...keys.map((k) => k.encounter));
         this.dungeon = { map, keys, lights: lightDungeon(map, keys, { amount: f.lighting }) };
       } else if (group === "battlemap") {
         const f = this.form.battlemap;
         this.battlemap = generateBattlemap({
           seed, setting: f.setting, size: f.size, night: f.night, title: f.setting === "shop" && f.shopName ? f.shopName : undefined,
-          traps: f.traps, locks: f.locks, partyLevel: this.form.encounter.level,
+          traps: f.traps, locks: f.locks, partyLevel: this.form.encounter.level, elevation: f.elevation, layout: f.layout,
         });
       } else if (group === "forge") {
         const f = this.form.forge;
@@ -1473,6 +1563,8 @@ export class ToolkitApp extends ApplicationV2 {
         this.loot = generateLoot({ seed, cr: this.form.loot.cr, mode: this.form.loot.mode, magicItems, forge: this.form.loot.forge, curse: this.form.loot.curse, theme: this.form.loot.theme || undefined });
       } else {
         this.hook = generateHook({ seed, partyLevel: this.form.hook.level, tone: this.form.hook.tone });
+        // People the party already knows as patron and villain, when the campaign has any.
+        if (this.form.hook.campaign) this.hook = bindHook(getCampaign(), this.hook, seed);
       }
     } catch (err) {
       ui.notifications.warn(`DnD Toolkit: ${(err as Error).message}`);
@@ -1838,6 +1930,120 @@ export class ToolkitApp extends ApplicationV2 {
   static #onTravelJournal(this: ToolkitApp) {
     const j = this.journey;
     if (j) createJournal(`Travel log: ${j.from} to ${j.to}`, journeyHtml(j), { kind: "travel", seed: j.seed });
+  }
+
+  static #onTravelCamp(this: ToolkitApp) {
+    this.#readForm();
+    const j = this.journey;
+    if (j) Object.assign(this.form.camp, { terrain: j.terrain, climate: j.climate, season: j.season, frequency: j.encounters ?? "normal", foes: j.foes ?? "" });
+    this.tab = "camp";
+    this.render();
+  }
+
+  static async #onMakeCamp(this: ToolkitApp) {
+    this.#readForm();
+    const f = this.form.camp;
+    if (getCamp()) {
+      CampApp.open();
+      return ui.notifications.warn("The party is already camped; finish or cancel that camp first.");
+    }
+    const away = new Set(f.away.split(",").filter(Boolean));
+    const campers = partyActors().filter((a: any) => !away.has(a.id)).map((a: any) => ({
+      actorId: a.id, name: a.name, img: a.img, level: Number(a.system?.details?.level ?? 1),
+    }));
+    if (!campers.length) return ui.notifications.warn("Nobody to camp: there are no player characters (with a player owner).");
+    const level = Math.round(campers.reduce((n, c) => n + c.level, 0) / campers.length);
+    await startCamp(newCamp({ terrain: f.terrain, climate: f.climate, season: f.season, frequency: f.frequency, foes: f.foes || undefined, trackFood: f.food, partyLevel: level, day: currentDay(), campers, seed: randomSeed() }));
+    CampApp.open();
+  }
+
+  #campView: CampaignView = "factions";
+  #campFilter = "";
+
+  /** Re-draw if this tab is showing (the campaign changed somewhere). */
+  static refreshTab(tab: Tab) {
+    const app = this.#instance;
+    if (app?.rendered && app.tab === tab) app.render();
+  }
+
+  static async #onCampaign(this: ToolkitApp, _e: Event, target: HTMLElement) {
+    const view = await campaignAction(target, this.element);
+    if (view) this.#campView = view;
+    this.render();
+  }
+
+  /** Add whatever this tab made to the campaign. */
+  static async #onCampTrack(this: ToolkitApp, _e: Event, target: HTMLElement) {
+    const day = currentDay();
+    const what = target.dataset.what;
+    if (what === "npc" && this.npc) {
+      const n = this.npc;
+      await updateCampaign((c) => register(c, { npcs: [npcRecord(n, day)] }, day));
+      ui.notifications.info(`${n.name} is in the campaign now (Campaign → People).`);
+    } else if (what === "town" && this.town) {
+      const t = this.town;
+      await updateCampaign((c) => register(c, fromTown(t, day), day));
+      ui.notifications.info(`${t.name}, its people and factions are in the campaign.`);
+    } else if (what === "hook" && this.hook) {
+      const h = this.hook;
+      const giver = getCampaign().npcs.find((n) => h.patron.startsWith(n.name));
+      await updateCampaign((c) => register(c, { quests: [questFromHook(h, day, giver?.id)] }, day));
+      ui.notifications.info("Tracked: it's in the Quest Log.");
+    } else if (what === "sidequest" && this.sidequest) {
+      const c = getCampaign();
+      const bound = bindSideQuest(c, this.sidequest, day);
+      this.sidequest = bound.quest;
+      await saveCampaign(register(c, { ...bound.add, quests: [bound.record] }, day));
+      ui.notifications.info(`Tracked: ${bound.quest.villainName} is behind it. The quest is in the Quest Log.`);
+      this.render();
+    }
+  }
+
+  static #onForgeCraft(this: ToolkitApp, _e: Event, target: HTMLButtonElement) {
+    const it = this.forged[Number(target.dataset.index)];
+    if (it) ProjectsApp.craftForged(it);
+  }
+
+  /** A night ambush from camp: the fight in the Encounter tab, or a night camp battlemap with it ready to place. */
+  static async campFight(e: { tags: string; difficulty: Difficulty; seed: string }, o: { level: number; size: number; map: boolean }) {
+    const app = (this.#instance ??= new ToolkitApp());
+    Object.assign(app.form.encounter, { seed: e.seed, tags: e.tags, difficulty: e.difficulty, template: "auto", level: o.level, size: o.size });
+    app.locked.clear();
+    await app.#generate("encounter");
+    if (o.map) {
+      Object.assign(app.form.battlemap, { seed: e.seed, setting: "camp", name: "Ambush at camp", place: true, night: true });
+      app.tab = "battlemap";
+      await app.#generate("battlemap");
+    } else app.tab = "encounter";
+    app.render({ force: true });
+  }
+
+  #campHtml() {
+    const f = this.form.camp;
+    const away = new Set(f.away.split(",").filter(Boolean));
+    const camp = getCamp();
+    const opts = <T extends string>(list: readonly T[]) => list.map((v): [string, string] => [v, v]);
+    return `
+      <p class="dt-sub">Day <strong>${currentDay()}</strong>. The day only moves when the party breaks camp or you hand out downtime.</p>
+      ${camp ? `<div class="dt-card"><p><i class="fa-solid fa-campground"></i> The party is camped (${esc(camp.phase)}).</p><button type="button" data-action="openCamp"><i class="fa-solid fa-campground"></i> Open the camp</button></div>` : ""}
+      <h3>Make camp</h3>
+      <div class="dt-row">
+        ${this.#select("camp", "terrain", "Terrain", (Object.entries(TERRAINS) as [Terrain, { label: string }][]).map(([v, t]): [string, string] => [v, t.label]), f.terrain)}
+        ${this.#select("camp", "climate", "Climate", opts(["temperate", "cold", "hot"] as const), f.climate)}
+        ${this.#select("camp", "season", "Season", opts(["spring", "summer", "autumn", "winter"] as const), f.season)}
+        ${this.#select("camp", "frequency", "Trouble at night", [["rare", "Rare"], ["normal", "Normal"], ["frequent", "Frequent"]], f.frequency)}
+      </div>
+      <div class="dt-row">
+        ${this.#field("camp", "foes", "Night foes (optional tags)", `<input type="text" list="dt-taglist" value="${esc(f.foes)}" placeholder="the terrain's own creatures">`)}
+        <label class="dt-check" title="Each camper eats a ration; foragers and hunters bring food in. Leave off to ignore food."><input type="checkbox" data-group="camp" name="food" ${f.food ? "checked" : ""}> Track food</label>
+      </div>
+      <div class="dt-row dt-campers">${partyActors().map((a: any) => `<label class="dt-check"><input type="checkbox" data-camper="${a.id}" ${away.has(a.id) ? "" : "checked"}> ${esc(a.name)}</label>`).join("") || `<span class="dt-muted">No player characters yet.</span>`}</div>
+      <input type="hidden" data-group="camp" name="away" value="${esc(f.away)}">
+      <div class="dt-row dt-actions">
+        <button type="button" data-action="makeCamp" ${camp ? "disabled" : ""}><i class="fa-solid fa-campground"></i> Make camp</button>
+        <button type="button" data-action="openProjects"><i class="fa-solid fa-book-open-reader"></i> Projects &amp; downtime</button>
+      </div>
+      <p class="dt-hint">Everyone gets the camp window. They vote on a spot, drag their characters onto jobs (cooking, foraging, hunting, tending wounds, keeping watch, studying…) and roll from their own sheets. You play the night out watch by watch, then apply the rest, boons and project progress in one click. Players open <strong>Camp</strong> and <strong>Projects</strong> from the token controls on the left.</p>`;
   }
 
   static #onTravelChat(this: ToolkitApp) {

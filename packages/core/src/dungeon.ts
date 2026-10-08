@@ -72,6 +72,8 @@ export interface DungeonMap {
   walls: WallSegment[];
   /** Smoothed floor outlines in grid units (caves); the walls follow these. */
   outlines?: [number, number][][];
+  /** Puzzles on the map (from placePuzzle). */
+  puzzles?: import("./map-puzzles.ts").MapPuzzle[];
 }
 
 const center = roomCenter;
@@ -265,6 +267,10 @@ export interface RoomKey {
   trapCells?: [number, number][];
   /** Extra GM notes: locked doors, who carries which key. */
   notes?: string[];
+  /** What the room is (barracks, ossuary...), from furnishDungeon. */
+  purpose?: string;
+  /** Furniture to paint, matching the purpose. */
+  furniture?: import("./rooms.ts").Furnishing[];
 }
 
 export interface LootPile {

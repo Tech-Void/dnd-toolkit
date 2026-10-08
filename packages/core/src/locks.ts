@@ -6,7 +6,7 @@ import { emptyLoot, type LootItem } from "./loot.ts";
 // Locked, stuck and barred doors, and the keys that open them. Keys are always somewhere the party
 // can reach without going through the door they open.
 
-export type LockKind = "locked" | "stuck" | "barred" | "arcane";
+export type LockKind = "locked" | "stuck" | "barred" | "arcane" | "sealed";
 
 export interface DoorLock {
   kind: LockKind;
@@ -36,7 +36,7 @@ export interface LockOptions {
   seed?: string | number;
 }
 
-export const LOCK_LABEL: Record<LockKind, string> = { locked: "Locked", stuck: "Stuck", barred: "Barred", arcane: "Arcane lock" };
+export const LOCK_LABEL: Record<LockKind, string> = { locked: "Locked", stuck: "Stuck", barred: "Barred", arcane: "Arcane lock", sealed: "Sealed" };
 
 const KEY_METALS = ["iron", "brass", "bronze", "blackened iron", "copper", "silver", "bone", "rusted iron", "verdigris-green", "tin"];
 const KEY_LOOKS = [
@@ -66,6 +66,8 @@ export function lockText(l: DoorLock): string {
       return `Stuck. ${force} Failing by 5 or more makes enough noise to alert anything nearby.`;
     case "barred":
       return `Barred from ${l.barredFrom ?? `the ${l.barSide === undefined ? "far" : l.barSide ? `Room ${l.barSide}` : "corridor"} side`}, where the bar lifts freely. Break it down: DC ${l.forceDc} Strength (Athletics).`;
+    case "sealed":
+      return `Sealed: no handle, no keyhole. It opens when the puzzle in Room ${l.rooms[0]} is solved. Breaking through: DC ${l.forceDc} Strength (Athletics), or a lot of time and tools.`;
     case "arcane":
       return `Sealed by an arcane lock. Pick it: DC ${l.pickDc}. ${force} Knock or dispel magic opens it.${l.key ? ` Password: "${l.key}"${l.keyAt ? ` (${l.keyAt})` : ""}.` : ""}`;
   }

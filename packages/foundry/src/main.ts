@@ -15,6 +15,13 @@ import { MODULE_ID } from "./util.ts";
 import { initRollRequests, sendRollRequest } from "./rolls.ts";
 import { initCombatHelpers, registerCombatSettings } from "./combat.ts";
 import { initInteractive, noticeTrap, setTrapArmed, springTrap } from "./interactive.ts";
+import { initPuzzles, puzzleStep } from "./puzzles.ts";
+import { CampApp } from "./camp-app.ts";
+import { registerFaSettings } from "./fa-assets.ts";
+import { registerCampaignSettings } from "./campaign-store.ts";
+import { registerEffectSettings } from "./effects.ts";
+import { ProjectsApp } from "./projects-app.ts";
+import { grantDowntime, initDowntimeSocket, logJourney, registerDowntimeSettings } from "./downtime.ts";
 
 /**
  * Public API for macros and other modules:
@@ -78,8 +85,16 @@ const api = {
   /** Called by trap Regions' scripts: a token stepped on a trap / walked up to one. */
   springTrap,
   noticeTrap,
+  /** Called by puzzle Regions' scripts: a token stepped on a lever, plate, statue or rune. */
+  puzzleStep,
   /** await tk.setTrapArmed(region, true) re-arms a sprung trap. */
   setTrapArmed,
+  /** Open the shared camp window, or the projects window. */
+  openCamp: () => CampApp.open(),
+  openProjects: (actorId?: string) => ProjectsApp.open(actorId),
+  /** await tk.grantDowntime(game.actors.filter(a => a.hasPlayerOwner), 3) */
+  grantDowntime,
+  logJourney,
 };
 
 Hooks.once("init", () => {
@@ -95,6 +110,10 @@ Hooks.once("init", () => {
   // Combat roles derived from compendium statblocks, so each monster is only analyzed once.
   game.settings.register(MODULE_ID, "roleCache", { scope: "world", config: false, type: Object, default: {} });
   registerCombatSettings();
+  registerDowntimeSettings(() => CampApp.refresh());
+  registerFaSettings();
+  registerCampaignSettings();
+  registerEffectSettings();
   // Monsters used lately, so generators don't keep reaching for the same ones.
   game.settings.register(MODULE_ID, "recentMonsters", { scope: "client", config: false, type: Array, default: [] });
   game.modules.get(MODULE_ID).api = api;
@@ -112,10 +131,29 @@ Hooks.once("ready", () => {
   initRollRequests();
   initCombatHelpers();
   initInteractive();
+  initPuzzles();
+  initDowntimeSocket();
+  // Someone joining mid-camp gets the camp window too.
+  CampApp.refresh();
   Hooks.callAll(`${MODULE_ID}.ready`, api);
 });
 
+Hooks.on(`${MODULE_ID}.campaignChanged`, () => ToolkitApp.refreshTab("campaign"));
+// Projects redraw when a character's projects (or the day) change.
+Hooks.on(`${MODULE_ID}.downtimeChanged`, () => ProjectsApp.refresh());
+Hooks.on("updateActor", (_actor: any, change: any) => {
+  if (change?.flags?.[MODULE_ID] || change?.system?.currency || change?.items) ProjectsApp.refresh();
+});
+for (const hook of ["createItem", "updateItem", "deleteItem"]) Hooks.on(hook, (item: any) => item.parent?.documentName === "Actor" && ProjectsApp.refresh());
+
 Hooks.on("getSceneControlButtons", (controls: any) => {
+  // Everyone: camp and projects.
+  const shared = [
+    { name: `${MODULE_ID}-camp`, title: "Camp", icon: "fa-solid fa-campground", button: true, visible: true, order: 101, onChange: () => CampApp.open() },
+    { name: `${MODULE_ID}-projects`, title: "Projects & Downtime", icon: "fa-solid fa-book-open-reader", button: true, visible: true, order: 102, onChange: () => ProjectsApp.open() },
+  ];
+  if (Array.isArray(controls)) controls.find((c: any) => c.name === "token")?.tools.push(...shared.map((t) => ({ ...t, onClick: t.onChange })));
+  else if (controls.tokens?.tools) for (const t of shared) controls.tokens.tools[t.name] = t;
   if (!game.user.isGM) return;
   const tool = {
     name: MODULE_ID,
