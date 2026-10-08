@@ -151,6 +151,8 @@ import { createJournal, encounterHtml, hookHtml, lootHtml, postToChat } from "./
 import { giveLootToActor } from "./importers/items.ts";
 import { linkEncounter, placeEncounter } from "./importers/tokens.ts";
 import { esc, MODULE_ID } from "./util.ts";
+import { getWorld, worldAction, worldCardHtml } from "./world-map.ts";
+import { placeLoot } from "./loot-piles.ts";
 
 const { ApplicationV2 } = foundry.applications.api;
 
@@ -360,6 +362,7 @@ export class ToolkitApp extends ApplicationV2 {
       travelJournal: ToolkitApp.#onTravelJournal,
       travelChat: ToolkitApp.#onTravelChat,
       travelCamp: ToolkitApp.#onTravelCamp,
+      world: ToolkitApp.#onWorld,
       makeCamp: ToolkitApp.#onMakeCamp,
       openCamp: () => CampApp.open(),
       openProjects: () => ProjectsApp.open(),
@@ -412,6 +415,7 @@ export class ToolkitApp extends ApplicationV2 {
       shopChat: ToolkitApp.#onShopChat,
       lootJournal: ToolkitApp.#onLootJournal,
       lootActor: ToolkitApp.#onLootActor,
+      lootPlace: ToolkitApp.#onLootPlace,
       hookChat: ToolkitApp.#onHookChat,
       hookJournal: ToolkitApp.#onHookJournal,
     },
@@ -740,7 +744,7 @@ export class ToolkitApp extends ApplicationV2 {
         </div>
         <div class="dt-checks">
           ${check("hidden", "Hidden rooms", "Seal a dead-end room or two behind secret doors, with treasure inside")}
-          ${check("piles", "Loot piles", "Stash treasure in findable piles with a DC, pinned as GM-only notes (and hidden Item Piles piles if installed)")}
+          ${check("piles", "Loot piles", "Stash treasure in hidden piles on the map: a character walking past spots one with passive Perception (or finds it with Search / loot), then loots it into the party stash. Pinned as GM-only notes.")}
           ${check("puzzle", "Puzzle", "A lever, pressure-plate, statue or rune puzzle that opens a sealed door (or the hidden room), with its clue carved in another room")}
           ${check("unique", "Unique items", "Hoards hold one-of-a-kind items from the Forge instead of standard magic items")}
           ${check("torches", "Torch-bearers", "One creature in each humanoid group carries a lit torch")}
@@ -822,6 +826,7 @@ export class ToolkitApp extends ApplicationV2 {
           <button type="button" data-action="lootChat"><i class="fa-solid fa-comment"></i> Post to chat</button>
           <button type="button" data-action="lootJournal"><i class="fa-solid fa-book"></i> Journal</button>
           <button type="button" data-action="lootActor"><i class="fa-solid fa-sack"></i> Give to selected token</button>
+          <button type="button" data-action="lootPlace" title="Put it on the map as a chest or sack the players walk up to and loot (next to the selected token, or the middle of the view). Shift-click: hidden, found with a DC 15 search."><i class="fa-solid fa-box-open"></i> Place on the map</button>
         </div>`
       : `<p class="dt-empty">Pick a CR and generate treasure.</p>`}`;
   }
@@ -1198,7 +1203,9 @@ export class ToolkitApp extends ApplicationV2 {
           <button type="button" data-action="travelReroll" data-day="${d.id}" title="Reroll this day"><i class="fa-solid fa-dice"></i></button>
         </div>
       </div>`;
+    const trip = getWorld()?.trip;
     return `
+      ${worldCardHtml(f.pace, trip && j ? j.days[trip.day]?.miles : undefined)}
       <div class="dt-row">
         ${this.#field("travel", "from", "From", `<input type="text" value="${esc(f.from)}" placeholder="the last town">`)}
         ${this.#field("travel", "to", "To", `<input type="text" value="${esc(f.to)}" placeholder="their destination">`)}
@@ -1750,6 +1757,16 @@ export class ToolkitApp extends ApplicationV2 {
     await giveLootToActor(this.loot, actor);
   }
 
+  static async #onLootPlace(this: ToolkitApp, e: Event) {
+    if (!this.loot || !canvas.scene) return ui.notifications.warn("Open a scene first.");
+    const gs = canvas.scene.grid.size;
+    const token = canvas.tokens?.controlled[0];
+    const at = token ? { x: Math.round(token.document.x / gs) + 1, y: Math.round(token.document.y / gs) } : { x: Math.floor(canvas.stage.pivot.x / gs), y: Math.floor(canvas.stage.pivot.y / gs) };
+    const hidden = (e as MouseEvent).shiftKey;
+    await placeLoot(canvas.scene, this.loot, at, { hidden, searchDc: hidden ? 15 : undefined });
+    ui.notifications.info(hidden ? "Placed, hidden (DC 15 to find)." : "Placed. Players walk up to it to loot it.");
+  }
+
   static #onShopMerchant(this: ToolkitApp, _e: Event, target: HTMLButtonElement) {
     const s = this.shop;
     if (s) this.#run(target, () => createMerchant(s));
@@ -1930,6 +1947,17 @@ export class ToolkitApp extends ApplicationV2 {
   static #onTravelJournal(this: ToolkitApp) {
     const j = this.journey;
     if (j) createJournal(`Travel log: ${j.from} to ${j.to}`, journeyHtml(j), { kind: "travel", seed: j.seed });
+  }
+
+  /** World map card on the Travel tab; planning a trip fills in (and plans) the journey. */
+  static async #onWorld(this: ToolkitApp, _e: Event, target: HTMLElement) {
+    this.#readForm();
+    const patch = await worldAction(target.dataset.op!, target.dataset, this.element, this.form.travel.pace);
+    if (patch) {
+      Object.assign(this.form.travel, patch, { seed: "" });
+      await this.#generate("travel");
+    }
+    this.render();
   }
 
   static #onTravelCamp(this: ToolkitApp) {

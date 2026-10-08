@@ -16,6 +16,12 @@ import { initRollRequests, sendRollRequest } from "./rolls.ts";
 import { initCombatHelpers, registerCombatSettings } from "./combat.ts";
 import { initInteractive, noticeTrap, setTrapArmed, springTrap } from "./interactive.ts";
 import { initPuzzles, puzzleStep } from "./puzzles.ts";
+import { initQuickCombat, quickAct, registerQuickCombatSettings } from "./quick-combat.ts";
+import { ActionBar } from "./action-bar.ts";
+import { initPartyHud, registerPartyHudSettings } from "./party-hud.ts";
+import { registerPrepSettings } from "./session-prep.ts";
+import { registerWorldSettings } from "./world-map.ts";
+import { createPile, ensureStash, initPiles, openStash, pileEnter, placeLoot, registerPileSettings, searchHere } from "./loot-piles.ts";
 import { CampApp } from "./camp-app.ts";
 import { registerFaSettings } from "./fa-assets.ts";
 import { registerCampaignSettings } from "./campaign-store.ts";
@@ -87,6 +93,8 @@ const api = {
   noticeTrap,
   /** Called by puzzle Regions' scripts: a token stepped on a lever, plate, statue or rune. */
   puzzleStep,
+  /** await tk.quickAct(actor, item, "advantage") — pick a target and resolve an attack, save or heal. */
+  quickAct,
   /** await tk.setTrapArmed(region, true) re-arms a sprung trap. */
   setTrapArmed,
   /** Open the shared camp window, or the projects window. */
@@ -95,6 +103,15 @@ const api = {
   /** await tk.grantDowntime(game.actors.filter(a => a.hasPlayerOwner), 3) */
   grantDowntime,
   logJourney,
+  /** Called by loot pile Regions' scripts: a token walked up to a pile. */
+  pileEnter,
+  /** await tk.placeLoot(canvas.scene, tk.generateLoot({ cr: 5, mode: "hoard" }), { x: 10, y: 4 }, { hidden: true, searchDc: 15 }) */
+  placeLoot,
+  createPile,
+  /** Open the pile you're next to, or search around the selected token. */
+  searchHere,
+  ensureStash,
+  openStash,
 };
 
 Hooks.once("init", () => {
@@ -113,7 +130,12 @@ Hooks.once("init", () => {
   registerDowntimeSettings(() => CampApp.refresh());
   registerFaSettings();
   registerCampaignSettings();
+  registerQuickCombatSettings();
   registerEffectSettings();
+  registerPartyHudSettings();
+  registerPrepSettings();
+  registerWorldSettings();
+  registerPileSettings();
   // Monsters used lately, so generators don't keep reaching for the same ones.
   game.settings.register(MODULE_ID, "recentMonsters", { scope: "client", config: false, type: Array, default: [] });
   game.modules.get(MODULE_ID).api = api;
@@ -132,6 +154,9 @@ Hooks.once("ready", () => {
   initCombatHelpers();
   initInteractive();
   initPuzzles();
+  initQuickCombat();
+  initPartyHud();
+  initPiles();
   initDowntimeSocket();
   // Someone joining mid-camp gets the camp window too.
   CampApp.refresh();
@@ -151,6 +176,9 @@ Hooks.on("getSceneControlButtons", (controls: any) => {
   const shared = [
     { name: `${MODULE_ID}-camp`, title: "Camp", icon: "fa-solid fa-campground", button: true, visible: true, order: 101, onChange: () => CampApp.open() },
     { name: `${MODULE_ID}-projects`, title: "Projects & Downtime", icon: "fa-solid fa-book-open-reader", button: true, visible: true, order: 102, onChange: () => ProjectsApp.open() },
+    { name: `${MODULE_ID}-actions`, title: "Quick actions (select your token)", icon: "fa-solid fa-hand-fist", button: true, visible: true, order: 103, onChange: () => ActionBar.show(canvas.tokens?.controlled[0]) },
+    { name: `${MODULE_ID}-search`, title: "Search / loot (select your token)", icon: "fa-solid fa-magnifying-glass", button: true, visible: true, order: 104, onChange: () => searchHere() },
+    { name: `${MODULE_ID}-stash`, title: "Party stash", icon: "fa-solid fa-sack-dollar", button: true, visible: true, order: 105, onChange: () => openStash() },
   ];
   if (Array.isArray(controls)) controls.find((c: any) => c.name === "token")?.tools.push(...shared.map((t) => ({ ...t, onClick: t.onChange })));
   else if (controls.tokens?.tools) for (const t of shared) controls.tokens.tools[t.name] = t;

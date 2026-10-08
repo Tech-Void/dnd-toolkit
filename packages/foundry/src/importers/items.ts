@@ -112,16 +112,25 @@ export async function resolveItemData(item: LootItem): Promise<object> {
   };
 }
 
-/** Give coins and items to an actor (dnd5e: coins go to system.currency). */
-export async function giveLootToActor(loot: LootResult, actor: any) {
-  if (isDnd5e()) {
+/**
+ * Give coins and items to an actor (dnd5e: coins go to system.currency). With `stack`, an item the
+ * actor already has (same name and type) gets its quantity raised instead of a second copy.
+ */
+export async function giveLootToActor(loot: Pick<LootResult, "coins" | "items">, actor: any, { quiet = false, stack = false } = {}) {
+  if (isDnd5e() && Object.values(loot.coins).some((n) => n > 0)) {
     const currency = { ...actor.system.currency };
     for (const [k, n] of Object.entries(loot.coins)) currency[k] = (currency[k] ?? 0) + n;
     await actor.update({ "system.currency": currency });
   }
-  const items = await Promise.all(loot.items.map(resolveItemData));
-  if (items.length) await actor.createEmbeddedDocuments("Item", items);
-  ui.notifications.info(`Gave ${loot.items.length} item(s) and coins to ${actor.name}.`);
+  const items: any[] = await Promise.all(loot.items.map(resolveItemData));
+  const fresh: any[] = [];
+  for (const data of items) {
+    const same = stack && actor.items.find((i: any) => i.name === data.name && i.type === data.type && "quantity" in (i.system ?? {}));
+    if (same) await same.update({ "system.quantity": Number(same.system.quantity ?? 1) + Number(data.system?.quantity ?? 1) });
+    else fresh.push(data);
+  }
+  if (fresh.length) await actor.createEmbeddedDocuments("Item", fresh);
+  if (!quiet) ui.notifications.info(`Gave ${loot.items.length} item(s) and coins to ${actor.name}.`);
 }
 
 /** Clear the cached compendium index (e.g. after installing new content). */

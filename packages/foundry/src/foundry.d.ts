@@ -15,4 +15,6 @@ declare const Folder: any;
 declare const ChatMessage: any;
 declare const TokenDocument: any;
 declare function fromUuid(uuid: string): Promise<any>;
+declare function fromUuidSync(uuid: string): any;
+declare const Combat: any;
 declare const CONFIG: any;

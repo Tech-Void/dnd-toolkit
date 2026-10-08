@@ -246,7 +246,7 @@ export async function noticeTrap(region: any, event: any) {
 }
 
 /** GM side: a character spotted a trap. Reveal it and stand down the warning ring. */
-async function resolveNotice(msg: { regionUuid: string; tokenName: string; passive: number }) {
+export async function resolveNotice(msg: { regionUuid: string; tokenName: string; passive: number; how?: string }) {
   if (!game.users.activeGM?.isSelf) return;
   const region = await fromUuid(msg.regionUuid);
   const trap: Trap | undefined = region?.getFlag(MODULE_ID, "trap");
@@ -262,7 +262,7 @@ async function resolveNotice(msg: { regionUuid: string; tokenName: string; passi
   ChatMessage.create({
     speaker: { alias: "DnD Toolkit" },
     whisper: gmIds(),
-    content: `<p>${esc(msg.tokenName)} found the ${esc(trap.name)} (passive ${msg.passive} vs DC ${trap.detect.dc}). Disarm: DC ${trap.disarm.dc}, ${esc(trap.disarm.method)}.</p>`,
+    content: `<p>${esc(msg.tokenName)} found the ${esc(trap.name)} (${msg.how ?? "passive"} ${msg.passive} vs DC ${trap.detect.dc}). Disarm: DC ${trap.disarm.dc}, ${esc(trap.disarm.method)}.</p>`,
   });
 }
 

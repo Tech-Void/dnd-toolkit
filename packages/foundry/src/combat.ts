@@ -1,9 +1,11 @@
-import { captiveTalk, lairActions, rateEncounter, turnAdvice, type EncounterGroup, type LootResult, type Wave } from "@dnd-toolkit/core";
+import { bestAim, captiveTalk, lairActions, parseMultiattack, pickTarget, rateEncounter, turnAdvice, type AimShape, type EncounterGroup, type LootResult, type TurnSituation, type Wave } from "@dnd-toolkit/core";
 import { lootHtml } from "./importers/journal.ts";
-import { giveLootToActor, resolveItemData } from "./importers/items.ts";
-import { itemPilesActive } from "./importers/shop.ts";
+import { giveLootToActor } from "./importers/items.ts";
+import { createBodyPile, placeLoot } from "./loot-piles.ts";
 import { placeEncounter } from "./importers/tokens.ts";
 import { esc, MODULE_ID } from "./util.ts";
+import { monsterConditions } from "./party-hud.ts";
+import { pickToken, quickAct, quickCombatOn, quickMulti, type QuickOptions } from "./quick-combat.ts";
 
 // ---------------------------------------------------------------------------
 // Help during fights with generated encounters: morale breaks when the leader falls or half the
@@ -13,7 +15,7 @@ import { esc, MODULE_ID } from "./util.ts";
 const SETTINGS: [key: string, name: string, hint: string][] = [
   ["combatMorale", "Combat: morale checks", "When a generated fight's leader falls or half the group is down, offer a morale roll; those who fail flee (frightened)."],
   ["combatWaves", "Combat: waves on cue", "When combat reaches a wave's round, post a card to bring the reinforcements in."],
-  ["combatLootPiles", "Combat: fallen foes become loot piles", "With Item Piles, a defeated monster from a generated fight turns into a lootable pile."],
+  ["combatLootPiles", "Combat: fallen foes can be searched", "A defeated hostile creature carries its pocket money and parts worth harvesting; players walk up (or Search / loot) to take them into the party stash."],
   ["combatTreasure", "Combat: treasure when the fight ends", "When the last foe of a generated fight falls, post its treasure with buttons to hand it out."],
   ["combatMeter", "Combat: threat meter", "Show how dangerous the remaining foes are for the party, in the combat tracker."],
   ["combatTactics", "Combat: monster turn cards", "On each monster's turn, whisper the GM what it does (target, retreat, recharge ready) with buttons for its attacks and abilities."],
@@ -50,11 +52,11 @@ async function onFoeDown(token: any) {
   const all = fightTokens(scene, id);
   const standing = all.filter((t: any) => hp(t.actor) > 0);
 
-  if (on("combatLootPiles") && itemPilesActive()) {
+  if (on("combatLootPiles")) {
     try {
-      await game.itempiles.API.turnTokensIntoItemPiles([token]);
+      await createBodyPile(token);
     } catch (err) {
-      console.warn(`${MODULE_ID} | loot pile`, err);
+      console.warn(`${MODULE_ID} | body pile`, err);
     }
   }
 
@@ -105,8 +107,57 @@ async function surrender(sceneId: string, tokenId: string) {
 /** Items a monster can use on its turn, by activation type. */
 const usable = (actor: any, types: string[]) => [...(actor?.items ?? [])].filter((i: any) => types.includes(i.system?.activation?.type) && ["weapon", "feat", "spell", "consumable"].includes(i.type));
 
-const itemButton = (actor: any, i: any, extra = "") =>
-  `<button type="button" data-dt-use="${i.id}" data-actor="${actor.uuid}" ${extra}>${esc(i.name)}${i.system?.recharge?.value ? ` <small>(${i.system.recharge.charged ? "ready" : `recharge ${i.system.recharge.value}+`})</small>` : ""}</button>`;
+const itemButton = (actor: any, i: any, extra = "", note = "") =>
+  `<button type="button" data-dt-use="${i.id}" data-actor="${actor.uuid}" ${extra}>${esc(i.name)}${note}${i.system?.recharge?.value ? ` <small>(${i.system.recharge.charged ? "ready" : `recharge ${i.system.recharge.value}+`})</small>` : ""}</button>`;
+
+const alive = (t: any) => hp(t?.actor) > 0;
+
+/** The token picked in a turn card's Target box (none: click one). */
+const cardTarget = (b: HTMLElement) => {
+  const id = (b.closest(".dt-combat-card")?.querySelector("select[data-dt-target]") as HTMLSelectElement | null)?.value;
+  return id ? canvas.tokens.get(id) : null;
+};
+
+/** Where a monster should put an area effect right now, and how many enemies it catches. */
+function aimFor(item: any, token: any): { x: number; y: number; direction: number; hits: number } | null {
+  const tg = item.system?.target ?? {};
+  const gs = canvas.grid?.size ?? 100;
+  const per = canvas.dimensions?.distance ?? 5;
+  const size = Number(tg.value ?? 0) / per;
+  if (!size || !token) return null;
+  const type = String(tg.type ?? "");
+  const shape: AimShape = type === "cone" ? { type: "cone", size }
+    : type === "line" || type === "wall" ? { type: "line", size, width: Math.max(1, Number(tg.width ?? per) / per) }
+    : { type: "circle", size: type === "cube" || type === "square" ? size / 2 : size };
+  const me = token.center;
+  const side = Math.sign(token.document.disposition);
+  const others = canvas.tokens.placeables.filter((t: any) => t !== token && alive(t) && t.visible !== false);
+  const g = (t: any) => ({ x: t.center.x / gs, y: t.center.y / gs });
+  const foes = others.filter((t: any) => Math.sign(t.document.disposition) === -side || (side === 0 && t.actor?.type === "character"));
+  const friends = others.filter((t: any) => Math.sign(t.document.disposition) === side && side !== 0);
+  const range = Number(item.system?.range?.value ?? 0) / per;
+  const aim = bestAim({ x: me.x / gs, y: me.y / gs }, shape, foes.map(g), friends.map(g), shape.type === "circle" && range ? range : 0);
+  return aim && { x: aim.x * gs, y: aim.y * gs, direction: aim.direction, hits: aim.hits.length };
+}
+
+/** Quick combat on a monster's turn: who it goes after (changeable), one-click Multiattack, aimed areas. */
+function smartActions(actor: any, token: any, actions: any[], s: TurnSituation & { tokens: any[] }) {
+  if (!s.foes.length) return { html: "", aims: new Map<string, number>() };
+  const pick = Math.max(0, pickTarget(s));
+  const select = `<label class="dt-turn-target"><i class="fa-solid fa-crosshairs"></i> Target
+    <select data-dt-target>${s.foes.map((f, i) => `<option value="${s.tokens[i]?.id ?? ""}"${i === pick ? " selected" : ""}>${esc(f.name)}${i === pick ? " (its pick)" : ""} · ${f.distance} ft</option>`).join("")}
+    <option value="">Click a token…</option></select></label>`;
+  const attacks = actions.filter((i: any) => i.hasAttack && !i.hasAreaTarget);
+  const multi = actions.find((i: any) => /multiattack/i.test(i.name));
+  const plan = multi ? parseMultiattack(String(multi.system?.description?.value ?? ""), attacks.map((i: any) => i.name)) : [];
+  const spec = plan.map((p) => `${attacks.find((i: any) => i.name === p.name)!.id}:${p.count}`).join(",");
+  const multiBtn = plan.length
+    ? `<button type="button" class="dt-multi" data-dt-multi="${spec}" data-actor="${actor.uuid}" title="Roll every attack at the target"><i class="fa-solid fa-burst"></i> Multiattack: ${esc(plan.map((p) => (p.count > 1 ? `${p.name} ×${p.count}` : p.name)).join(", "))}</button>`
+    : "";
+  const aims = new Map<string, number>();
+  for (const i of actions) if (i.hasAreaTarget) aims.set(i.id, aimFor(i, token?.object)?.hits ?? 0);
+  return { html: `<div class="dt-turn-smart">${select}${multiBtn}</div>`, aims };
+}
 
 /** The current monster's turn: what it should do, and its actions as buttons. */
 async function monsterTurn(combat: any) {
@@ -128,21 +179,28 @@ async function monsterTurn(combat: any) {
       name: x.name, hp: hp(x.actor) / Math.max(1, Number(x.actor.system?.attributes?.hp?.max ?? 1)),
       distance: Math.round(Math.hypot(o.x - center.x, o.y - center.y) / gs) * 5,
       caster: !!x.actor.system?.attributes?.spellcasting, ac: x.actor.system?.attributes?.ac?.value,
+      token: x.token,
     };
   }).sort((a: any, b: any) => a.distance - b.distance);
   const allies = combat.combatants.filter((x: any) => x !== c && x.actor?.type === "npc" && (x.token?.disposition ?? -1) < 0 && !x.isDefeated && hp(x.actor) > 0).length;
   const actions = usable(actor, ["action", "bonus"]);
   const recharge = actions.filter((i: any) => i.system?.recharge?.value).map((i: any) => ({ name: i.name, ready: !!i.system.recharge.charged }));
-  const advice = turnAdvice({
+  const situation: TurnSituation & { tokens: any[] } = {
     name: actor.name, hp: hp(actor) / Math.max(1, maxHp), roles: token?.getFlag(MODULE_ID, "roles") ?? [], type: actor.system?.details?.type?.value,
     int: actor.system?.abilities?.int?.value, leader: !!token?.getFlag(MODULE_ID, "leader"), allies, foes, recharge,
     signature: actions.find((i: any) => /multiattack/i.test(i.name))?.name,
-  });
+    tokens: foes.map((f: any) => f.token),
+  };
+  const advice = turnAdvice(situation);
   const pct = Math.round((hp(actor) / Math.max(1, maxHp)) * 100);
+  const smart = quickCombatOn() ? smartActions(actor, token, actions, situation) : { html: "", aims: new Map<string, number>() };
+  const conds = monsterConditions(actor);
   const uncharged = actions.filter((i: any) => i.system?.recharge?.value && !i.system.recharge.charged);
   await card(`<p><strong>${esc(c.name)}</strong>'s turn <span class="dt-hpbar"><span style="width:${pct}%"></span></span> ${hp(actor)}/${maxHp} HP</p>
+    ${conds ? `<p class="dt-turn-conds">${conds}</p>` : ""}
     <ul>${advice.map((a) => `<li>${esc(a)}</li>`).join("")}</ul>
-    <div class="dt-turn-actions">${actions.map((i: any) => itemButton(actor, i)).join("")}
+    ${smart.html}
+    <div class="dt-turn-actions">${actions.map((i: any) => itemButton(actor, i, smart.aims.has(i.id) ? `data-aim="1" title="Aims itself where it catches the most of them"` : "", smart.aims.has(i.id) ? ` <small>(hits ${smart.aims.get(i.id)})</small>` : "")).join("")}
       ${uncharged.map((i: any) => `<button type="button" data-dt-recharge="${i.id}" data-actor="${actor.uuid}"><i class="fa-solid fa-dice-six"></i> Recharge ${esc(i.name)}</button>`).join("")}</div>`);
 }
 
@@ -183,23 +241,19 @@ async function announceTreasure(id: string, lastToken: any) {
   }
   await card(
     `<p><strong>The last foe falls.</strong> Their treasure:</p>${lootHtml(loot)}
-     ${itemPilesActive() ? `<button type="button" data-dt-pile="${id}" data-scene="${lastToken.parent.id}" data-x="${lastToken.x}" data-y="${lastToken.y}"><i class="fa-solid fa-sack-dollar"></i> Drop it as a loot pile here</button>` : ""}
+     <button type="button" data-dt-pile="${id}" data-scene="${lastToken.parent.id}" data-x="${lastToken.x}" data-y="${lastToken.y}"><i class="fa-solid fa-sack-dollar"></i> Drop it here for them to loot</button>
      <button type="button" data-dt-give="${id}"><i class="fa-solid fa-hand-holding"></i> Give to selected token</button>`,
     { loot },
   );
 }
 
 async function dropLootPile(message: any, sceneId: string, x: number, y: number) {
+  const scene = game.scenes.get(sceneId);
   const loot: LootResult = message.getFlag(MODULE_ID, "loot");
-  const items = await Promise.all(loot.items.map(resolveItemData));
-  const currency = Object.fromEntries(Object.entries(loot.coins).filter(([, n]) => n > 0));
-  await game.itempiles.API.createItemPile({
-    sceneId,
-    position: { x, y },
-    items,
-    actorOverrides: Object.keys(currency).length ? { system: { currency } } : undefined,
-    tokenOverrides: { name: "Treasure" },
-  });
+  if (!scene || !loot) return;
+  const gs = scene.grid.size;
+  // Next to where the last one fell, so it doesn't sit under the body.
+  await placeLoot(scene, loot, { x: Math.round(x / gs) + 1, y: Math.round(y / gs) }, { kind: "treasure" });
 }
 
 // --- Waves -------------------------------------------------------------------------------
@@ -255,6 +309,8 @@ export function initCombatHelpers() {
     if (newHp === undefined || newHp > 0) return;
     const token = actor.token ?? actor.getActiveTokens?.()[0]?.document;
     if (token && encounterOf(token)) onFoeDown(token);
+    // Any other hostile creature can be searched too.
+    else if (token && actor.type === "npc" && token.disposition < 0 && on("combatLootPiles")) createBodyPile(token).catch((err) => console.warn(`${MODULE_ID} | body pile`, err));
   });
 
   Hooks.on("updateCombat", (combat: any, change: any, _opts: any) => {
@@ -303,10 +359,32 @@ export function initCombatHelpers() {
         const actor = await fromUuid(b.dataset.actor!);
         const item = actor?.items.get(b.dataset.dtUse);
         if (!item) return;
-        await item.use?.();
+        // Quick combat: at the card's target (or click one), areas aim themselves; otherwise dnd5e's own card.
+        const source = actor.token?.object ?? actor.getActiveTokens?.()[0];
+        if (quickCombatOn() && (item.hasAttack || item.hasSave || item.hasDamage)) {
+          const opts: QuickOptions = {};
+          if (item.hasAreaTarget && b.dataset.aim) {
+            const aim = aimFor(item, source);
+            if (aim?.hits) opts.aim = aim;
+          } else if (!item.hasAreaTarget) {
+            const target = cardTarget(b);
+            if (target) opts.targets = [target];
+          }
+          await quickAct(actor, item, "normal", source, opts);
+        } else await item.use?.();
         const cost = Number(b.dataset.legendary ?? 0);
         const legact = actor.system?.resources?.legact;
         if (cost && legact) await actor.update({ "system.resources.legact.value": Math.max(0, legact.value - cost) });
+      });
+    }
+    for (const b of root.querySelectorAll("button[data-dt-multi]") as NodeListOf<HTMLButtonElement>) {
+      b.addEventListener("click", async () => {
+        const actor = await fromUuid(b.dataset.actor!);
+        if (!actor) return;
+        const plan = b.dataset.dtMulti!.split(",").map((p) => p.split(":")).map(([id, n]) => ({ item: actor.items.get(id), count: Number(n) })).filter((p) => p.item);
+        const source = actor.token?.object ?? actor.getActiveTokens?.()[0];
+        const target = cardTarget(b) ?? (await pickToken(`${actor.name}'s Multiattack: click a target (Esc to cancel).`));
+        if (target) await quickMulti(actor, plan, target, source);
       });
     }
     for (const b of root.querySelectorAll("button[data-dt-recharge]") as NodeListOf<HTMLButtonElement>) {

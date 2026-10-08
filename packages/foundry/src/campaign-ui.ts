@@ -15,6 +15,7 @@ import {
 import { getCampaign, saveCampaign, updateCampaign } from "./campaign-store.ts";
 import { currentDay } from "./downtime.ts";
 import { createNpcActor } from "./importers/npc.ts";
+import { prepAction, prepHtml } from "./session-prep.ts";
 import { esc } from "./util.ts";
 
 // ---------------------------------------------------------------------------
@@ -22,10 +23,10 @@ import { esc } from "./util.ts";
 // what those people remember), places, quests, and a running log. Buttons carry data-op; one
 // handler does the rest.
 
-export type CampaignView = "factions" | "people" | "places" | "quests" | "log";
+export type CampaignView = "next" | "factions" | "people" | "places" | "quests" | "log";
 
 const VIEWS: [CampaignView, string, string][] = [
-  ["factions", "Factions", "fa-flag"], ["people", "People", "fa-users"], ["places", "Places", "fa-location-dot"], ["quests", "Quests", "fa-scroll"], ["log", "Log", "fa-feather"],
+  ["next", "Next session", "fa-clipboard-list"], ["factions", "Factions", "fa-flag"], ["people", "People", "fa-users"], ["places", "Places", "fa-location-dot"], ["quests", "Quests", "fa-scroll"], ["log", "Log", "fa-feather"],
 ];
 
 const standingBar = (n: number) => `<span class="dt-standing s${n}" title="${standingLabel(n)}">${[-3, -2, -1, 0, 1, 2, 3].map((i) => `<i class="${i === n ? "on" : ""}"></i>`).join("")}<b>${standingLabel(n)}</b></span>`;
@@ -35,14 +36,14 @@ const op = (name: string, label: string, data: Record<string, string> = {}, titl
 export function campaignHtml(view: CampaignView, filter: string): string {
   const c = getCampaign();
   const tabs = VIEWS.map(([v, label, icon]) => `<button type="button" class="${v === view ? "active" : ""}" data-action="campaign" data-op="view" data-view="${v}"><i class="fa-solid ${icon}"></i> ${label} <small>${count(c, v)}</small></button>`).join("");
-  const body = { factions: factionsHtml, people: peopleHtml, places: placesHtml, quests: questsHtml, log: logHtml }[view](c, filter.toLowerCase());
+  const body = { next: () => prepHtml(), factions: factionsHtml, people: peopleHtml, places: placesHtml, quests: questsHtml, log: logHtml }[view](c, filter.toLowerCase());
   return `<p class="dt-sub">Day <strong>${currentDay()}</strong>. Use the <em>Remember</em> / <em>Track</em> buttons on the NPC, Settlement, Plot Hook and Side Quest tabs to add things here; the players' <strong>Quest Log</strong> journal updates by itself.</p>
     <div class="dt-camp-tabs">${tabs}</div>
     ${view === "people" ? `<input type="search" class="dt-camp-filter" data-campaign-filter value="${esc(filter)}" placeholder="Find someone…">` : ""}
     <div class="dt-campaign">${body}</div>`;
 }
 
-const count = (c: CampaignState, v: CampaignView) => ({ factions: c.factions.length, people: c.npcs.length, places: c.places.length, quests: c.quests.filter((q) => q.status === "active").length, log: c.log.length })[v];
+const count = (c: CampaignState, v: CampaignView) => ({ next: "", factions: c.factions.length, people: c.npcs.length, places: c.places.length, quests: c.quests.filter((q) => q.status === "active").length, log: c.log.length })[v];
 
 function factionsHtml(c: CampaignState): string {
   const kinds = FACTION_KINDS.map((k) => `<option value="${k}">${k}</option>`).join("");
@@ -127,6 +128,7 @@ export async function campaignAction(target: HTMLElement, root: HTMLElement): Pr
   const d = target.dataset;
   const day = currentDay();
   const value = (sel: string) => ((root.querySelector(sel) as HTMLInputElement | null)?.value ?? "").trim();
+  if (d.op?.startsWith("prep")) return void (await prepAction(d.op, d, root));
   switch (d.op) {
     case "view":
       return d.view as CampaignView;

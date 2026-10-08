@@ -1,13 +1,12 @@
-import { lockPin, roomCenter, type DungeonLight, type DungeonMap, type LootPile, type RoomKey, type WallSegment } from "@dnd-toolkit/core";
+import { lockPin, makePile, roomCenter, type DungeonLight, type DungeonMap, type LootPile, type RoomKey, type WallSegment } from "@dnd-toolkit/core";
 import { lockedDoorData, trapRegionData } from "../interactive.ts";
+import { createPile } from "../loot-piles.ts";
 import { dungeonToBlob, tokenCells } from "../render.ts";
 import { dungeonArt } from "../fa-assets.ts";
 import { dungeonEffects, effectTiles } from "../effects.ts";
 import { puzzleDoorFlag, puzzleSceneData } from "../puzzles.ts";
-import { ambientLight, ensureFolder, isDnd5e, MODULE_ID } from "../util.ts";
-import { resolveItemData } from "./items.ts";
+import { ambientLight, ensureFolder, MODULE_ID } from "../util.ts";
 import { createRoomKeyJournal } from "./journal.ts";
-import { itemPilesActive } from "./shop.ts";
 import { linkEncounter, placeEncounter } from "./tokens.ts";
 
 // v13 namespaces it; v12 declares `class FilePicker` at the top level of a classic script, which is a
@@ -51,18 +50,9 @@ export interface SceneImportOptions {
 /** Which room's page a door's pin links to: the room side of it (not the corridor). */
 const pinRoom = (w: WallSegment) => w.lock!.rooms.find((r) => r !== 0) ?? 0;
 
-/** A hidden Item Piles pile holding the loot, if Item Piles is active. */
-async function createLootPile(scene: any, pile: LootPile, gs: number) {
-  if (!itemPilesActive()) return;
-  const items = await Promise.all(pile.loot.items.map(resolveItemData));
-  const currency = Object.fromEntries(Object.entries(pile.loot.coins).filter(([, n]) => n > 0));
-  await game.itempiles.API.createItemPile({
-    sceneId: scene.id,
-    position: { x: pile.cell[0] * gs, y: pile.cell[1] * gs },
-    items,
-    actorOverrides: isDnd5e() && Object.keys(currency).length ? { system: { currency } } : undefined,
-    tokenOverrides: { name: "Loot", hidden: true },
-  });
+/** A hidden pile on the map: found by passive Perception or a Search, then looted into the party stash. */
+async function createLootPile(scene: any, pile: LootPile, i: number) {
+  await createPile(scene, makePile(pile.loot, { id: `${scene.id}-pile-${i}`, kind: "cache", hidden: true, searchDc: pile.dc }), { x: pile.cell[0], y: pile.cell[1], tile: true, note: pile.note });
 }
 
 /** Create a fully playable Scene: background image, walls, doors, vision, and room notes. */
@@ -161,7 +151,8 @@ export async function createDungeonScene(map: DungeonMap, opts: SceneImportOptio
       if (key.encounter) await placeEncounter(key.encounter, { scene, cells: tokenCells(map, key), hidden: true, torchBearers: opts.torchBearers, lair: /Lair/.test(key.title) });
     }
   }
-  for (const key of opts.roomKey ?? []) for (const pile of key.piles ?? []) await createLootPile(scene, pile, gs);
+  let pileNo = 0;
+  for (const key of opts.roomKey ?? []) for (const pile of key.piles ?? []) await createLootPile(scene, pile, pileNo++);
   // Traps: trigger squares that stop and pause, and a ring where sharp eyes spot them first.
   const regions: object[] = (opts.roomKey ?? []).flatMap((k) => (k.trapData && k.trapCells?.length ? trapRegionData(k.trapData, k.trapCells, gs, `room-${k.roomId}`) : []));
   // Puzzles: a tile and a region for every lever, plate, statue and rune.

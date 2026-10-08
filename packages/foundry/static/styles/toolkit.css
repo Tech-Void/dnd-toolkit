@@ -428,3 +428,91 @@
 .dt-turn-actions { display: flex; flex-wrap: wrap; gap: 0.2rem; }
 .dt-turn-actions button { flex: 1 1 45%; margin: 0; font-size: 0.85em; line-height: 1.6; }
 .dt-combat-card li button { width: auto; margin-left: 0.3rem; font-size: 0.8em; line-height: 1.4; }
+
+/* Quick combat */
+.dt-actionbar .window-content { padding: 0.4rem 0.6rem; }
+.dt-ab-head { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.4rem; }
+.dt-ab-head > img { width: 34px; height: 34px; border-radius: 50%; border: 1px solid rgba(255, 255, 255, 0.3); object-fit: cover; object-position: top; }
+.dt-ab-modes { margin-left: auto; display: inline-flex; gap: 0.2rem; }
+.dt-ab-modes button { width: auto; flex: 0 0 auto; font-size: 0.8em; line-height: 1.6; }
+.dt-ab-modes button.active { background: #c46a2b; color: #fff; border-color: #e8964a; }
+.dt-ab-group h4 { margin: 0.3rem 0 0.2rem; font-size: 0.8em; opacity: 0.7; text-transform: uppercase; letter-spacing: 0.05em; border: none; }
+.dt-ab-group { display: flex; flex-wrap: wrap; gap: 0.25rem; }
+.dt-ab-group h4 { flex-basis: 100%; }
+.dt-ab-group button { width: auto; flex: 0 0 auto; display: inline-flex; align-items: center; gap: 0.3rem; padding: 2px 8px 2px 2px; line-height: 1.4; }
+.dt-ab-group button img { width: 26px; height: 26px; border: none; border-radius: 4px; }
+.dt-ab-group button small { opacity: 0.65; margin-left: 0.2rem; }
+.dt-qc-card p { margin: 0.2rem 0; }
+.dt-qc-undo { width: auto; margin-left: 0.4rem; font-size: 0.8em; line-height: 1.4; }
+
+/* Monster turn: target picker and Multiattack */
+.dt-turn-smart { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin: 4px 0; }
+.dt-turn-target { display: flex; align-items: center; gap: 4px; flex: 1 1 100%; font-size: 12px; }
+.dt-turn-target select { flex: 1; height: 24px; }
+.dt-combat-card button.dt-multi { flex: 1 1 100%; font-weight: 600; border-color: #a33; }
+
+/* Party HUD */
+#dt-party-hud { position: fixed; top: 100px; left: 110px; z-index: 60; width: 230px; background: rgba(20, 18, 16, 0.86); color: #eee; border: 1px solid #5a4a3a; border-radius: 6px; font-size: 12px; box-shadow: 0 2px 8px rgba(0,0,0,.5); user-select: none; }
+#dt-party-hud header { display: flex; align-items: center; gap: 6px; padding: 3px 6px; cursor: move; font-weight: 600; border-bottom: 1px solid #3a3028; }
+#dt-party-hud.collapsed header { border-bottom: none; }
+#dt-party-hud .dt-hud-toggle { margin-left: auto; cursor: pointer; color: #bbb; }
+#dt-party-hud ol { list-style: none; margin: 0; padding: 3px; }
+.dt-hud-member { display: flex; gap: 5px; padding: 3px; border-radius: 4px; cursor: pointer; }
+.dt-hud-member:hover { background: rgba(255,255,255,.06); }
+.dt-hud-member.dying { background: rgba(140, 20, 20, .35); }
+.dt-hud-face { width: 34px; height: 34px; border: none; border-radius: 4px; object-fit: cover; flex: none; }
+.dt-hud-body { flex: 1; min-width: 0; }
+.dt-hud-top { display: flex; justify-content: space-between; gap: 4px; }
+.dt-hud-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.dt-hud-ac { color: #c9d3e0; flex: none; }
+.dt-hud-hp { position: relative; height: 13px; margin: 2px 0; background: #2a2220; border-radius: 3px; overflow: hidden; }
+.dt-hud-hp .bar { position: absolute; inset: 0 auto 0 0; background: #3f9a4a; }
+.dt-hud-hp.hurt .bar { background: #c79a2a; }
+.dt-hud-hp.bad .bar { background: #b8352c; }
+.dt-hud-hp .temp { position: absolute; top: 0; bottom: 0; background: #4a8ad8; }
+.dt-hud-hp .txt { position: relative; display: block; text-align: center; font-size: 10px; line-height: 13px; text-shadow: 0 0 2px #000; }
+.dt-hud-status { display: flex; flex-wrap: wrap; gap: 2px; align-items: center; }
+.dt-hud-status img { width: 14px; height: 14px; border: none; }
+.dt-hud-conc { color: #d8b4ff; font-size: 10px; }
+.dt-hud-slots { display: flex; flex-wrap: wrap; gap: 4px; font-size: 10px; color: #bbb; }
+.dt-slot b { margin-right: 1px; }
+.dt-slot i { display: inline-block; width: 6px; height: 6px; margin-left: 1px; border-radius: 50%; border: 1px solid #8a7cff; }
+.dt-slot i.full { background: #8a7cff; }
+
+/* Turn reminders */
+.dt-turn-reminder ul { margin: 2px 0; padding-left: 16px; }
+.dt-turn-reminder .dt-dying { color: #b8352c; font-weight: 600; margin: 2px 0; }
+.dt-turn-conds { margin: 2px 0; }
+.dt-cond { display: inline-block; padding: 0 4px; border-radius: 3px; background: rgba(160, 60, 40, .2); border: 1px solid rgba(160, 60, 40, .5); font-size: 11px; cursor: help; }
+
+/* Next session prep */
+.dt-prep-form { flex-wrap: wrap; gap: 4px 8px; align-items: center; }
+.dt-prep-form label { display: flex; align-items: center; gap: 4px; }
+.dt-prep ul { margin: 2px 0; padding-left: 18px; }
+.dt-prep .dt-enc-head button { flex: none; width: auto; margin-left: auto; padding: 0 6px; line-height: 1.4; }
+.dt-prep-fight { border-top: 1px dashed rgba(0,0,0,.2); padding-top: 3px; margin-top: 3px; }
+.dt-prep-fight p button { width: auto; float: right; line-height: 1.4; }
+
+/* World map card (Travel tab) */
+.dt-world .dt-row { flex-wrap: wrap; gap: 4px 8px; align-items: center; }
+.dt-world label { display: flex; align-items: center; gap: 4px; }
+.dt-world label select { max-width: 14em; }
+.dt-world .dt-enc-head button { width: auto; margin-left: auto; line-height: 1.4; }
+.dt-world-bar { height: 8px; margin: 4px 0; background: rgba(0,0,0,.15); border-radius: 4px; overflow: hidden; }
+.dt-world-bar span { display: block; height: 100%; background: #c0392b; }
+
+/* Loot window */
+.dt-loot-window .window-content { padding: 8px 10px; }
+.dt-loot-who { margin: 0 0 4px; }
+.dt-loot-status { list-style: none; margin: 0 0 6px; padding: 0; font-size: 12px; }
+.dt-loot-status .dt-loot-warn { color: #b8352c; font-weight: 600; }
+.dt-loot-items { list-style: none; margin: 4px 0; padding: 0; max-height: 320px; overflow-y: auto; }
+.dt-loot-items li { display: flex; align-items: center; gap: 6px; padding: 2px 0; border-bottom: 1px solid rgba(0,0,0,.08); }
+.dt-loot-items label { display: flex; align-items: center; gap: 6px; flex: 1; cursor: pointer; }
+.dt-loot-items em { color: #7a3fb0; font-size: 11px; }
+.dt-loot-part span { flex: 1; }
+.dt-loot-part button { flex: none; width: auto; line-height: 1.5; font-size: 11px; }
+.dt-loot-actions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.dt-loot-actions button { flex: 1 1 45%; }
+.dt-loot-foot { margin-top: 6px; font-size: 11px; }
+.dt-ab-search { flex: none; width: auto; margin-left: auto; line-height: 1.6; }

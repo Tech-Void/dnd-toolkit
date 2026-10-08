@@ -39,6 +39,8 @@ export interface LootItem {
   material?: MaterialTag;
   /** Harvested parts: the CR of the creature it came from (rare ingredients for magic items). */
   sourceCr?: number;
+  /** Parts still on the body: the check to take them (a failure ruins them). */
+  harvest?: { skill: string; dc: number };
 }
 
 /** A magic item available for treasure, e.g. from the user's item compendiums. */
@@ -311,6 +313,7 @@ function parts(rng: Rng, creatures: readonly LootSource[]): LootItem[] {
         sourceCr: c.cr,
         quantity: c.count ?? 1,
         valueGp: Math.max(1, Math.round(base * mult)),
+        harvest: { skill, dc },
         note: `Harvest: DC ${dc} ${SKILL_NAMES[skill]} check, 10 minutes per creature; a failure ruins it. Spoils in 1d4 days unless preserved. Sells to ${buyer}.`,
       });
     }

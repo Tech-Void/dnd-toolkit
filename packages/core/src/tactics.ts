@@ -101,3 +101,103 @@ export function captiveTalk(name: string, seed?: string | number, ctx: { boss?: 
   const price = rng.pick(["for their life", "for gold (10 gp a question)", "only under Intimidation (DC 13)", "if the party promises to let them go", "after a DC 12 Persuasion check, and they lie about one detail"]);
   return `${name} surrenders. They know ${knows}, and will talk ${price}.`;
 }
+
+/** Index into `foes` of the creature it goes after (same reasoning as the advice), or -1. */
+export function pickTarget(s: TurnSituation): number {
+  if (!s.foes.length) return -1;
+  const roles = new Set(s.roles ?? []);
+  const smart = (s.int ?? 8) >= 10;
+  const animal = (s.int ?? 8) <= 4 || s.type === "beast";
+  const idx = (f: TurnSituation["foes"][number] | undefined) => (f ? s.foes.indexOf(f) : 0);
+  const inReach = s.foes.filter((f) => f.distance <= 30);
+  const weakest = lowest(inReach.length ? inReach : s.foes, (f) => f.hp);
+  const caster = s.foes.find((f) => f.caster && f.distance <= 60);
+  if (animal) return 0;
+  if (roles.has("artillery")) return idx(caster ?? weakest);
+  if (roles.has("skirmisher")) return idx(weakest);
+  if (roles.has("leader") || roles.has("solo") || s.leader) return idx(caster && smart ? caster : weakest);
+  if (roles.has("brute") || roles.has("soldier") || roles.has("minion")) return 0;
+  return smart ? idx(weakest) : 0;
+}
+
+// --- Multiattack -------------------------------------------------------------------------------
+
+const COUNT: Record<string, number> = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, once: 1, twice: 2, thrice: 3 };
+
+/**
+ * Read a Multiattack description into the attacks it makes: "makes three attacks: one with its
+ * bite and two with its claws" → bite ×1, claws ×2. Only names that match one of `attacks` are kept.
+ */
+export function parseMultiattack(text: string, attacks: readonly string[]): { name: string; count: number }[] {
+  const t = text.toLowerCase().replace(/<[^>]+>/g, " ");
+  const names = attacks.map((n) => ({ n, key: n.toLowerCase().replace(/\s*\(.*\)\s*/, "").trim() }));
+  const find = (phrase: string) => names.find(({ key }) => phrase.includes(key) || key.includes(phrase.trim()) || phrase.includes(key.replace(/s$/, "")));
+  const out = new Map<string, number>();
+  // "one with its bite", "two with its claws", "two claw attacks", "three longsword attacks"
+  for (const m of t.matchAll(/\b(one|two|three|four|five|six)\s+(?:attacks?\s+)?(?:with\s+(?:its|his|her|their)\s+)?([a-z' -]+?)(?:\s+attacks?)?(?=[,.;]| and | or |$)/g)) {
+    const hit = find(m[2]!);
+    if (hit) out.set(hit.n, (out.get(hit.n) ?? 0) + COUNT[m[1]!]!);
+  }
+  if (!out.size) {
+    // "makes two attacks" with only one attack available.
+    const total = /makes\s+(one|two|three|four|five|six)\s+(?:melee\s+|ranged\s+|weapon\s+)*attacks?/.exec(t);
+    if (total && attacks.length) out.set(attacks[0]!, COUNT[total[1]!]!);
+  }
+  return [...out].map(([name, count]) => ({ name, count }));
+}
+
+// --- Aiming area effects -----------------------------------------------------------------------
+
+export interface AimShape {
+  type: "cone" | "line" | "circle";
+  /** Length (cone/line) or radius (circle), in squares. */
+  size: number;
+  /** Line width in squares. */
+  width?: number;
+}
+
+/** Is point p inside the area (origin o, pointing `deg`)? Grid units. 5e cones are as wide as they are long. */
+export function inArea(shape: AimShape, o: { x: number; y: number }, deg: number, p: { x: number; y: number }): boolean {
+  const dx = p.x - o.x;
+  const dy = p.y - o.y;
+  const d = Math.hypot(dx, dy);
+  if (shape.type === "circle") return d <= shape.size + 0.01;
+  const a = (deg * Math.PI) / 180;
+  const along = dx * Math.cos(a) + dy * Math.sin(a);
+  const across = Math.abs(-dx * Math.sin(a) + dy * Math.cos(a));
+  if (along < 0 || along > shape.size + 0.01) return false;
+  if (shape.type === "line") return across <= (shape.width ?? 1) / 2 + 0.01;
+  // Cone half-angle ≈ 26.57° (width equals length).
+  return across <= along / 2 + 0.01;
+}
+
+/**
+ * Point an area where it catches the most foes and the fewest friends. Cones and lines start at the
+ * caster and turn to face; circles are centred on a foe (or between two). Returns the aim and who's in it.
+ */
+export function bestAim(origin: { x: number; y: number }, shape: AimShape, foes: { x: number; y: number }[], friends: { x: number; y: number }[] = [], range = 0): { x: number; y: number; direction: number; hits: number[] } | null {
+  if (!foes.length) return null;
+  let best: { x: number; y: number; direction: number; hits: number[]; score: number } | null = null;
+  const score = (o: { x: number; y: number }, deg: number) => {
+    const hits = foes.map((f, i) => (inArea(shape, o, deg, f) ? i : -1)).filter((i) => i >= 0);
+    const ff = friends.filter((f) => inArea(shape, o, deg, f)).length;
+    return { hits, score: hits.length * 10 - ff * 12 };
+  };
+  if (shape.type === "circle") {
+    const centres = [...foes, ...foes.flatMap((a, i) => foes.slice(i + 1).map((b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 })))];
+    for (const c of centres) {
+      if (range && Math.hypot(c.x - origin.x, c.y - origin.y) > range) continue;
+      const r = score(c, 0);
+      if (!best || r.score > best.score) best = { x: c.x, y: c.y, direction: 0, ...r };
+    }
+  } else {
+    const angles = new Set<number>();
+    for (let a = 0; a < 360; a += 5) angles.add(a);
+    for (const f of foes) angles.add(Math.round((Math.atan2(f.y - origin.y, f.x - origin.x) * 180) / Math.PI + 360) % 360);
+    for (const deg of angles) {
+      const r = score(origin, deg);
+      if (!best || r.score > best.score) best = { x: origin.x, y: origin.y, direction: deg, ...r };
+    }
+  }
+  return best && best.hits.length ? { x: best.x, y: best.y, direction: best.direction, hits: best.hits } : null;
+}
