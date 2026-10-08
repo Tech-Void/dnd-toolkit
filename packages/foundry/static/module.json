@@ -3,10 +3,24 @@
   "title": "DnD Toolkit",
   "description": "Free GM toolkit: dungeon map generation with walls and doors, room keys, treasure and plot hooks — generated straight into your world.",
   "version": "0.1.0",
-  "compatibility": { "minimum": "12", "verified": "12" },
-  "esmodules": ["scripts/main.js"],
-  "styles": ["styles/toolkit.css"],
+  "compatibility": {
+    "minimum": "12",
+    "verified": "12"
+  },
+  "esmodules": [
+    "scripts/main.js"
+  ],
+  "styles": [
+    "styles/toolkit.css"
+  ],
   "relationships": {
-    "recommends": [{ "id": "dnd5e", "type": "system", "reason": "Loot becomes real dnd5e Items and currency." }]
-  }
+    "recommends": [
+      {
+        "id": "dnd5e",
+        "type": "system",
+        "reason": "Loot becomes real dnd5e Items and currency."
+      }
+    ]
+  },
+  "socket": true
 }

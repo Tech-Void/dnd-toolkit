@@ -63,4 +63,21 @@ You gain a +1 bonus to AC and saving throws while you wear this cloak.`);
       { key: "system.bonuses.abilities.save", mode: 2, value: "+1" },
     ]);
   });
+
+  it("puts a spell's buff on it as an effect for its targets, lasting the spell's duration", async () => {
+    const data = await build(`Steady Hand
+1st-level enchantment
+Casting Time: 1 action
+Range: 30 feet
+Components: V, S
+Duration: Concentration, up to 10 minutes
+Each target gains a +1 bonus to attack rolls it makes with ranged weapons.`);
+    expect(data.effects).toEqual([expect.objectContaining({
+      name: "Steady Hand",
+      transfer: false,
+      duration: { seconds: 600 },
+      changes: [{ key: "system.bonuses.rwak.attack", mode: 2, value: "+1" }],
+    })]);
+    expect(data.system.properties).toContain("concentration");
+  });
 });

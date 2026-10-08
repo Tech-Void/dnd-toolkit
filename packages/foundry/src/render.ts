@@ -9,6 +9,7 @@ import {
   type DungeonMap,
   type Rng,
   type RoomKey,
+  type WallSegment,
 } from "@dnd-toolkit/core";
 import { CAVE_FLOOR_STYLE, ROCK_STYLE, stoneTexture } from "./texture.ts";
 
@@ -302,8 +303,39 @@ export const tokenCells = (map: DungeonMap, key: RoomKey) => {
  * GM preview overlay: a dot per creature where its token will go (red; dark red in the lair),
  * gold squares for loot piles and dashed outlines around hidden rooms.
  */
+/** Preview marks: trap triggers (red crossed squares) and locked, stuck or barred doors (gold dots). */
+export function drawInteractiveMarks(ctx: CanvasRenderingContext2D, traps: readonly (readonly [number, number][])[], walls: readonly WallSegment[], c: number) {
+  ctx.save();
+  for (const cells of traps) {
+    for (const [x, y] of cells) {
+      ctx.fillStyle = "rgba(214, 40, 40, 0.35)";
+      ctx.fillRect(x * c, y * c, c, c);
+      ctx.strokeStyle = "#d62828";
+      ctx.lineWidth = Math.max(1, c * 0.08);
+      ctx.beginPath();
+      ctx.moveTo((x + 0.2) * c, (y + 0.2) * c);
+      ctx.lineTo((x + 0.8) * c, (y + 0.8) * c);
+      ctx.moveTo((x + 0.8) * c, (y + 0.2) * c);
+      ctx.lineTo((x + 0.2) * c, (y + 0.8) * c);
+      ctx.stroke();
+    }
+  }
+  for (const w of walls) {
+    if (!w.lock) continue;
+    ctx.fillStyle = w.lock.kind === "stuck" ? "#c98b3a" : w.lock.kind === "barred" ? "#8a5a2b" : w.lock.kind === "arcane" ? "#9d6cff" : "#f0c040";
+    ctx.strokeStyle = "#2a1a05";
+    ctx.lineWidth = Math.max(1, c * 0.06);
+    ctx.beginPath();
+    ctx.arc(((w.x1 + w.x2) / 2) * c, ((w.y1 + w.y2) / 2) * c, c * 0.28, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
 export function drawDungeonOverlay(canvas: HTMLCanvasElement, map: DungeonMap, keys: RoomKey[], c: number) {
   const ctx = canvas.getContext("2d")!;
+  drawInteractiveMarks(ctx, keys.flatMap((k) => (k.trapCells ? [k.trapCells] : [])), map.walls, c);
   for (const key of keys) {
     const room = map.rooms.find((r) => r.id === key.roomId);
     if (!room) continue;

@@ -242,6 +242,11 @@ export interface EncounterOptions {
   creatureTypes?: readonly string[];
   /** Monsters to pick more often, e.g. the main encounter's when building a wave. */
   favor?: readonly MonsterEntry[];
+  /**
+   * Monsters (ids or names) used recently, most recent first. They're picked far less often, so
+   * a session doesn't keep meeting the same creatures.
+   */
+  recent?: readonly string[];
 }
 
 export interface EncounterGroup {
@@ -363,7 +368,8 @@ function pickIn(rng: Rng, pool: Pick[], min: number, max: number, prefer: readon
   const inRange = pool.filter((p) => p.xp >= min && p.xp <= max && !avoid?.has(p.monster));
   if (!inRange.length) return null;
   const preferred = inRange.filter((p) => p.monster.roles.some((r) => prefer.includes(r)));
-  const from = preferred.length && rng.chance(0.8) ? preferred : inRange;
+  // Prefer fitting roles, but not so hard that one caster leads every fight in a narrow theme.
+  const from = preferred.length && rng.chance(0.5) ? preferred : inRange;
   return rng.weighted(from.map((p) => [p, p.weight] as const));
 }
 
@@ -449,6 +455,13 @@ export function generateEncounter(opts: EncounterOptions): Encounter {
   const locked = (opts.locked ?? []).map((g) => ({ ...g }));
   const lockedIds = new Set(locked.map((g) => g.monster.id));
   const favored = new Set((opts.favor ?? []).map((m) => m.id));
+  // The more recently a monster was used, the less likely it comes back.
+  const recentList = opts.recent ?? [];
+  const recentSet = new Set(recentList);
+  const recentPenalty = (m: MonsterEntry) => {
+    const i = Math.max(recentList.indexOf(m.id), recentList.indexOf(m.name));
+    return i < 0 ? 1 : 0.08 + 0.6 * (i / Math.max(1, recentList.length));
+  };
   const fullBudget = opts.budget ?? xpBudget(partyLevel, partySize, difficulty);
   // With locked groups, only the remainder of the budget and cap is generated.
   const B = fullBudget - locked.reduce((sum, g) => sum + g.xpEach * g.count, 0);
@@ -472,7 +485,12 @@ export function generateEncounter(opts: EncounterOptions): Encounter {
   } else if (!typed && (!query.clauses.length || rng.chance(0.7))) {
     const fits = matched.filter((m) => xpForCr(m.cr) <= B && xpForCr(m.cr) >= B / 20);
     if (fits.length) {
-      const type = rng.pick(fits).type;
+      // Pick the theme by type, not by monster: beasts vastly outnumber everything else, so a
+      // per-monster pick is almost always "beast". Square-rooting the counts evens it out.
+      const byType = new Map<string, number>();
+      for (const m of fits) byType.set(m.type, (byType.get(m.type) ?? 0) + 1);
+      const recentTypes = new Set(catalog.filter((m) => recentSet.has(m.id) || recentSet.has(m.name)).map((m) => m.type));
+      const type = rng.weighted([...byType].map(([t, n]) => [t, Math.sqrt(n) * (recentTypes.has(t) ? 0.4 : 1)] as const));
       matched = matched.filter((m) => m.type === type);
     }
   }
@@ -482,7 +500,7 @@ export function generateEncounter(opts: EncounterOptions): Encounter {
     .map((monster) => ({
       monster,
       xp: xpForCr(monster.cr),
-      weight: (race && isAnyRace(monster) ? 1 : 6) * (favored.has(monster.id) ? 4 : 1),
+      weight: (race && isAnyRace(monster) ? 1 : 6) * (favored.has(monster.id) ? 4 : 1) * recentPenalty(monster),
     }))
     .filter((p) => p.xp > 0);
 
@@ -511,7 +529,17 @@ export function generateEncounter(opts: EncounterOptions): Encounter {
   let best: Result | null = null;
   if (results.length) {
     const bestScore = Math.min(...results.map((r) => r.score));
-    const good = results.filter((r) => r.score <= Math.max(0.12, bestScore + 0.05));
+    // Count each distinct line-up once: a monster that happens to fit the budget neatly turns up
+    // in many identical drafts, and shouldn't win just by being drafted more often.
+    const seen = new Set<string>();
+    const good = results.filter((r) => {
+      // Within 15% of the budget still rates at the difficulty asked for; closer fits are only mildly favored.
+      if (r.score > Math.max(0.15, bestScore + 0.05)) return false;
+      const key = [...r.draft].map(([m, n]) => `${m.id}x${n}`).sort().join("|");
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    }).map((r) => ({ ...r, weight: r.weight * (1.2 - r.score) * Math.min(...[...r.draft.keys()].map(recentPenalty)) }));
     // Normalize per template so templates that happen to produce more valid drafts don't dominate.
     const perTemplate = new Map<EncounterTemplate, number>();
     for (const r of good) perTemplate.set(r.template, (perTemplate.get(r.template) ?? 0) + 1);
@@ -560,7 +588,10 @@ export function generateEncounter(opts: EncounterOptions): Encounter {
     terrain: rng.pick(TERRAIN),
     warnings,
   };
-  if (opts.loot) encounter.loot = generateLoot({ cr: maxCr, mode: "individual", magicItems: opts.magicItems, seed: `${rng.seed}:loot` });
+  if (opts.loot) {
+    const creatures = groups.map((g) => ({ name: g.monster.name, type: g.monster.type, cr: g.monster.cr, count: g.count }));
+    encounter.loot = generateLoot({ cr: maxCr, mode: "individual", magicItems: opts.magicItems, creatures, seed: `${rng.seed}:loot` });
+  }
   return encounter;
 }
 
@@ -598,6 +629,8 @@ const ARRIVALS = [
 ];
 
 export interface WaveOptions {
+  /** Monsters used recently in the session, to avoid repeating. */
+  recent?: readonly string[];
   catalog?: readonly MonsterEntry[];
   /** Wave budget as a share of the encounter's budget. Default 0.5. */
   share?: number;
@@ -620,6 +653,7 @@ export function addWave(e: Encounter, opts: WaveOptions = {}): Encounter {
     creatureTypes: [...new Set(e.groups.map((g) => g.monster.type))],
     // Reinforcements are usually more of the same.
     favor: e.groups.map((g) => g.monster),
+    recent: opts.recent,
     catalog: opts.catalog,
     seed: `${rng.seed}:wave`,
   });

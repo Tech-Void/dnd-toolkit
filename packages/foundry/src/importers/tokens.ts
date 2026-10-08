@@ -1,6 +1,6 @@
 import type { Encounter, EncounterGroup, MonsterEntry } from "@dnd-toolkit/core";
 import { findByName } from "../catalog.ts";
-import { ensureFolder } from "../util.ts";
+import { ensureFolder, MODULE_ID } from "../util.ts";
 
 /** A world Actor for the monster, importing it from its compendium once and reusing it after. */
 export async function ensureWorldActor(monster: MonsterEntry): Promise<any> {
@@ -35,6 +35,8 @@ export interface PlaceOptions {
   startCombat?: boolean;
   /** One creature in each humanoid group carries a torch (a light on its token). */
   torchBearers?: boolean;
+  /** Which fight these tokens belong to (defaults to the encounter's seed). */
+  encounterId?: string;
 }
 
 /** Token light for a torch-bearer. */
@@ -51,7 +53,9 @@ function cellsAround(cx: number, cy: number, radius: number): [number, number][]
  * Place an encounter's (or a wave's) tokens without overlapping each other or existing tokens.
  * With startCombat, they join the current combat if there is one. Returns the created tokens.
  */
-export async function placeEncounter(encounter: { groups: readonly EncounterGroup[] }, opts: PlaceOptions = {}) {
+export async function placeEncounter(encounter: { groups: readonly EncounterGroup[]; seed?: string; loot?: unknown; waves?: unknown[] }, opts: PlaceOptions = {}) {
+  // Tokens remember which fight they belong to (and who leads it) for morale, loot and waves.
+  const encounterId = opts.encounterId ?? encounter.seed;
   const scene = opts.scene ?? canvas.scene;
   if (!scene) throw new Error("No active scene to place tokens on.");
   const gs = scene.grid.size;
@@ -108,6 +112,7 @@ export async function placeEncounter(encounter: { groups: readonly EncounterGrou
         y: sceneY + cell[1] * gs,
         hidden: !!opts.hidden,
         name: g.name,
+        flags: { [MODULE_ID]: { encounter: encounterId, leader: g.role === "leader" || g.role === "solo" } },
         ...(torch ? { light: TORCH_LIGHT } : {}),
       });
       tokens.push(td.toObject());
@@ -116,6 +121,10 @@ export async function placeEncounter(encounter: { groups: readonly EncounterGrou
   if (problems.length) ui.notifications.warn(`DnD Toolkit: ${[...new Set(problems)].join(" ")}`);
 
   const created = await scene.createEmbeddedDocuments("Token", tokens);
+  // The fight's waves and treasure stay with the scene, for the combat helpers (however combat starts).
+  if (encounterId && (encounter.waves?.length || encounter.loot) && !scene.getFlag(MODULE_ID, `encounters.${encounterId}`)) {
+    await scene.setFlag(MODULE_ID, `encounters.${encounterId}`, { waves: encounter.waves ?? [], loot: encounter.loot ?? null, arrived: [] });
+  }
   if (opts.startCombat && created.length) {
     // Creates a combat for the viewed scene if there isn't one; returns the new combatants.
     const combatants = await TokenDocument.implementation.createCombatants(created);

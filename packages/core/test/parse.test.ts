@@ -140,6 +140,47 @@ describe("spells", () => {
   });
 });
 
+describe("buff spells (D&D Beyond layout, no Damage/Effect value)", () => {
+  // Written for this test: same shape as a D&D Beyond copy where the description follows Damage/Effect.
+  const STEADY_HAND = `Steady Hand
+Level
+1st
+Casting Time
+1 Action
+Range/Area
+30 ft.
+Components
+V, S
+Duration
+1 Minute
+School
+Enchantment
+Attack/Save
+None
+Damage/Effect
+You steady the aim of up to three creatures within range. Each target gains a +1 bonus to attack rolls it makes with Ranged weapons, and a +2 bonus to AC, for the duration.
+
+Using a Higher-Level Spell Slot. You can target one additional creature for each slot level above 1.`;
+
+  it("keeps the description, the range and the buff", () => {
+    const [e] = parseText(STEADY_HAND);
+    expect(e).toMatchObject({ name: "Steady Hand", target: { value: 3, type: "creature" }, range: { value: 30, units: "ft" }, duration: { value: 1, units: "minute" }, actionType: "util", spell: { level: 1, school: "enc" } });
+    expect(e!.paragraphs[0]).toMatch(/^You steady the aim/);
+    expect(e!.paragraphs.join(" ")).not.toMatch(/30 ft\.|Enchantment|None/);
+    expect(e!.targetEffects).toEqual([
+      { label: "Attack bonus", key: "system.bonuses.rwak.attack", mode: "add", value: "+1" },
+      { label: "AC bonus", key: "system.attributes.ac.bonus", mode: "add", value: "+2" },
+    ]);
+    expect(e!.warnings.join(" ")).toMatch(/adds targets/);
+  });
+
+  it("still takes a short Damage/Effect value when there is one", () => {
+    const [e] = parseText(FIREBALL_DDB);
+    expect(e!.paragraphs[0]).toMatch(/^A bright streak/);
+    expect(e!.paragraphs.join(" ")).not.toMatch(/^Fire\b/);
+  });
+});
+
 describe("magic items", () => {
   it("reads weapons: base, rarity, attunement and extra damage", () => {
     const [e] = parseText(FLAME_TONGUE);

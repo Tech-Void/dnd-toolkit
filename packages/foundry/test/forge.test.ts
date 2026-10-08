@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from "vitest";
-import { forgeItem } from "@dnd-toolkit/core";
+import { blankPower, curseItem, forgeItem } from "@dnd-toolkit/core";
 import { forgedItemData } from "../src/importers/forge.ts";
 
 beforeAll(() => {
@@ -21,7 +21,7 @@ describe("forgedItemData", () => {
   });
 
   it("builds a wand that rolls its power: charges, save DC, damage and area", async () => {
-    const it = forgeItem({ kind: "wand", base: "wand", rarity: "rare", theme: "fire", seed: "wand" });
+    const it = { ...forgeItem({ kind: "wand", base: "wand", rarity: "rare", theme: "fire", seed: "wand" }), power: blankPower("blast", "rare", "fire") };
     const { system } = await forgedItemData(it);
     expect(system.type).toEqual({ value: "wand" });
     expect(system.uses).toMatchObject({ value: 5, max: "5", per: "dawn", recovery: "1d4+1" });
@@ -44,4 +44,14 @@ describe("forgedItemData", () => {
     const plate = await forgedItemData(forgeItem({ kind: "armor", base: "Plate Armor", rarity: "uncommon", seed: "plate" }));
     expect(plate.system).toMatchObject({ type: { value: "heavy" }, armor: { value: 18, dex: 0, magicalBonus: 1 } });
   });
+
+  it("creates cursed items unidentified, disguised as harmless", async () => {
+    const it = curseItem(forgeItem({ kind: "weapon", base: "Longsword", rarity: "rare", seed: "cursed" }), "x");
+    const data = await forgedItemData(it);
+    expect(data.system.identified).toBe(false);
+    expect(data.system.unidentified.name).toBe("Fine Longsword");
+    expect(data.system.unidentified.description).not.toMatch(/Curse/);
+    expect(data.system.description.value).toMatch(/Curse/);
+  });
 });
+

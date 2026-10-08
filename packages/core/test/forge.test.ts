@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BASE_WEAPONS, forgedSubtitle, forgeItem, forgeItems, generateLoot, RARITIES, type ForgeKind } from "../src/index.ts";
+import { BASE_WEAPONS, curseItem, disguisedItem, liftCurse, blankItem, blankPower, effectText, EFFECT_CATALOG, forgedProperties, powerText, forgedSubtitle, forgeItem, forgeItems, generateLoot, RARITIES, type ForgeKind } from "../src/index.ts";
 
 describe("forgeItem", () => {
   it("is reproducible", () => {
@@ -14,14 +14,16 @@ describe("forgeItem", () => {
 
     const ring = forgeItem({ kind: "wondrous", base: "ring", rarity: "uncommon", seed: "r" });
     expect(ring).toMatchObject({ base: "Ring", itemType: "equipment" });
-    expect(ring.properties.length).toBeGreaterThan(0);
+    expect(forgedProperties(ring).length).toBeGreaterThan(0);
   });
 
   it("scales with rarity", () => {
     const bonus = RARITIES.map((rarity) => forgeItem({ kind: "weapon", rarity, seed: "scale" }).bonus);
     expect(bonus).toEqual([0, 1, 2, 3, 3]);
-    const dcs = RARITIES.slice(1).map((rarity) => forgeItem({ kind: "wand", rarity, seed: "w" }).power!.save!.dc);
+    const dcs = RARITIES.slice(1).map((rarity) => blankPower("blast", rarity, "fire").save!.dc);
     expect(dcs).toEqual([13, 15, 17, 19]);
+    const dice = RARITIES.slice(1).map((rarity) => blankPower("blast", rarity, "fire").damage!.formula);
+    expect(dice).toEqual(["3d6", "5d6", "7d6", "9d6"]);
   });
 
   it("gives every kind real mechanics and sensible attunement", () => {
@@ -29,7 +31,7 @@ describe("forgeItem", () => {
       for (let i = 0; i < 25; i++) {
         const it = forgeItem({ kind, rarity: kind === "relic" ? undefined : "rare", seed: `${kind}${i}` });
         expect(it.name.length).toBeGreaterThan(3);
-        expect(it.properties.length).toBeGreaterThan(0);
+        expect(forgedProperties(it).length).toBeGreaterThan(0);
         if (it.effects.length || it.power) expect(it.attunement).toBe(true);
         for (const e of it.effects) expect(e.key).toMatch(/^system\./);
         if (kind === "wand") expect(it.power?.charges).toBeGreaterThan(0);
@@ -65,3 +67,82 @@ describe("forged loot", () => {
     expect(magic).toBeGreaterThan(10);
   });
 });
+
+describe("forge variety and text", () => {
+  it("rolls every kind of power and weapon property across seeds", () => {
+    const powers = new Set<string>();
+    const props = new Set<string>();
+    for (let i = 0; i < 80; i++) {
+      const wand = forgeItem({ kind: "wand", rarity: "rare", seed: `p${i}` });
+      powers.add(wand.power!.kind);
+      const blade = forgeItem({ kind: "weapon", rarity: "very rare", seed: `w${i}` });
+      if (blade.critThreshold) props.add("keen");
+      if (blade.critDamage) props.add("vicious");
+      if (blade.bane) props.add("bane");
+    }
+    expect([...powers].sort()).toEqual(["blast", "bolt", "heal", "utility"]);
+    expect([...props].sort()).toEqual(["bane", "keen", "vicious"]);
+  });
+
+  it("curses when asked, and never by default", () => {
+    expect(Array.from({ length: 30 }, (_, i) => forgeItem({ seed: `c${i}`, rarity: "rare" })).some((it) => it.cursed)).toBe(false);
+    const cursed = forgeItem({ kind: "wondrous", rarity: "rare", curse: "always", seed: "curse" });
+    expect(cursed.cursed).toBe(true);
+    expect(cursed.attunement).toBe(true);
+    expect(forgedSubtitle(cursed)).toMatch(/cursed$/);
+  });
+
+  it("describes every catalog effect and power in words", () => {
+    for (const t of EFFECT_CATALOG) {
+      const text = effectText({ label: t.label, key: t.key, mode: t.mode, value: t.sample });
+      expect(text).toMatch(/\.$/);
+      expect(text).not.toMatch(/system\./);
+    }
+    for (const kind of ["blast", "bolt", "heal", "utility"] as const) {
+      expect(powerText(blankPower(kind, "rare", "cold"))).toMatch(/charges/);
+    }
+  });
+
+  it("re-describes an item from its numbers after editing", () => {
+    const it = blankItem("weapon");
+    it.bonus = 2;
+    it.critThreshold = 19;
+    it.effects.push({ label: "Fire", key: "system.traits.dr.value", mode: "add", value: "fire" });
+    expect(forgedProperties(it)).toEqual([
+      "You gain a +2 bonus to attack and damage rolls made with this magic weapon.",
+      "Attacks with it score a critical hit on a roll of 19 or 20.",
+      "You have resistance to fire damage.",
+    ]);
+  });
+});
+
+describe("curses", () => {
+  it("curses, recurses and lifts without touching the rest of the item", () => {
+    const base = forgeItem({ kind: "wondrous", rarity: "rare", seed: "clean" });
+    const cursed = curseItem(base, "c1");
+    expect(cursed.cursed).toBe(true);
+    expect(cursed.attunement).toBe(true);
+    expect(cursed.notes.filter((n) => n.startsWith("Curse.")).length).toBe(1);
+    // Rerolling swaps the curse rather than stacking them.
+    const again = curseItem(cursed, "c2");
+    expect(again.notes.filter((n) => n.startsWith("Curse.")).length).toBe(1);
+    expect(again.effects.filter((e) => e.label.startsWith("Curse:")).length).toBeLessThanOrEqual(1);
+    const lifted = liftCurse(again);
+    expect(lifted).toMatchObject({ cursed: undefined, effects: base.effects, notes: base.notes });
+  });
+
+  it("disguises a cursed item as a harmless one", () => {
+    const cursed = curseItem(forgeItem({ kind: "weapon", base: "Longsword", rarity: "rare", seed: "d" }), "x");
+    const disguise = disguisedItem(cursed);
+    expect(disguise.name).toBe("Fine Longsword");
+    expect(disguise.properties.join(" ")).not.toMatch(/Curse|vulnerable|-1 bonus/);
+  });
+
+  it("can curse forged hoard loot", () => {
+    const items = Array.from({ length: 10 }, (_, i) => generateLoot({ cr: 12, mode: "hoard", forge: true, curse: "always", seed: `cl${i}` }))
+      .flatMap((l) => l.items.filter((it) => it.forged));
+    expect(items.length).toBeGreaterThan(3);
+    expect(items.every((it) => it.forged!.cursed || it.forged!.kind === "relic")).toBe(true);
+  });
+});
+

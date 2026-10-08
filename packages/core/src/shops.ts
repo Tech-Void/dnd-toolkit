@@ -206,7 +206,24 @@ const QUIRKS = [
   "keeps a cursed item on a high shelf, 'not for sale'",
 ];
 
-const NAME_ADJECTIVES = ["Gilded", "Rusty", "Honest", "Crooked", "Silver", "Copper", "Laughing", "Sleeping", "Iron", "Red", "Wandering", "Lucky", "Old", "Hidden"];
+const NAME_ADJECTIVES = ["Gilded", "Rusty", "Honest", "Crooked", "Silver", "Copper", "Laughing", "Sleeping", "Iron", "Red", "Wandering", "Lucky", "Old", "Hidden",
+  "Brass",
+  "Blue",
+  "Merry",
+  "Thrifty",
+  "Black",
+  "Golden",
+  "Prancing",
+  "Wise",
+  "Humble",
+  "Twisted",
+  "Patient",
+  "Brave",
+  "Sly",
+  "Busy",
+  "Quiet",
+  "Royal",
+];
 
 export interface ShopStockEntry {
   item: ShopItemRef;

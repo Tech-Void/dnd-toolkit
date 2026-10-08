@@ -1,4 +1,5 @@
-import { roomCenter, type DungeonLight, type DungeonMap, type LootPile, type RoomKey } from "@dnd-toolkit/core";
+import { lockPin, roomCenter, type DungeonLight, type DungeonMap, type LootPile, type RoomKey, type WallSegment } from "@dnd-toolkit/core";
+import { lockedDoorData, trapRegionData } from "../interactive.ts";
 import { dungeonToBlob, tokenCells } from "../render.ts";
 import { ambientLight, ensureFolder, isDnd5e, MODULE_ID } from "../util.ts";
 import { resolveItemData } from "./items.ts";
@@ -44,6 +45,9 @@ export interface SceneImportOptions {
   activate?: boolean;
 }
 
+/** Which room's page a door's pin links to: the room side of it (not the corridor). */
+const pinRoom = (w: WallSegment) => w.lock!.rooms.find((r) => r !== 0) ?? 0;
+
 /** A hidden Item Piles pile holding the loot, if Item Piles is active. */
 async function createLootPile(scene: any, pile: LootPile, gs: number) {
   if (!itemPilesActive()) return;
@@ -70,6 +74,8 @@ export async function createDungeonScene(map: DungeonMap, opts: SceneImportOptio
     // Foundry wants whole pixels; smoothed cave walls fall between grid lines.
     c: [w.x1, w.y1, w.x2, w.y2].map((v) => Math.round(v * gs)),
     door: w.secret ? CONST.WALL_DOOR_TYPES.SECRET : w.door ? CONST.WALL_DOOR_TYPES.DOOR : CONST.WALL_DOOR_TYPES.NONE,
+    // Locked, stuck and barred doors start LOCKED; players clicking one get to pick, force or unlock it.
+    ...(w.lock ? lockedDoorData(w.lock) : {}),
   }));
 
   let journal: any = null;
@@ -91,6 +97,21 @@ export async function createDungeonScene(map: DungeonMap, opts: SceneImportOptio
         iconSize: Math.round(gs * 0.5),
         fontSize: Math.round(gs * 0.3),
       });
+      // Trap triggers and locked doors get pins too.
+      if (key.trapData && key.trapCells?.length) {
+        const [tx, ty] = key.trapCells[0]!;
+        notes.push({
+          entryId: journal.id, pageId: page.id, x: Math.round((tx + 0.5) * gs), y: Math.round((ty + 0.5) * gs),
+          text: `Trap: ${key.trapData.name}`, texture: { src: "icons/svg/trap.svg", tint: "#ff5544" }, iconSize: Math.round(gs * 0.4), fontSize: Math.round(gs * 0.22),
+        });
+      }
+      for (const w of map.walls.filter((w) => w.lock && w.lock.rooms.includes(key.roomId) && pinRoom(w) === key.roomId)) {
+        notes.push({
+          entryId: journal.id, pageId: page.id, x: Math.round(((w.x1 + w.x2) / 2) * gs), y: Math.round(((w.y1 + w.y2) / 2) * gs),
+          text: lockPin(w.lock!), texture: { src: w.lock!.kind === "locked" || w.lock!.kind === "arcane" ? "icons/svg/padlock.svg" : "icons/svg/door-locked-outline.svg", tint: "#f0c040" },
+          iconSize: Math.round(gs * 0.35), fontSize: Math.round(gs * 0.2),
+        });
+      }
       // Loot piles get their own pins. The room key is GM-only, so players never see them.
       for (const pile of key.piles ?? []) {
         notes.push({
@@ -133,6 +154,9 @@ export async function createDungeonScene(map: DungeonMap, opts: SceneImportOptio
     }
   }
   for (const key of opts.roomKey ?? []) for (const pile of key.piles ?? []) await createLootPile(scene, pile, gs);
+  // Traps: trigger squares that stop and pause, and a ring where sharp eyes spot them first.
+  const regions = (opts.roomKey ?? []).flatMap((k) => (k.trapData && k.trapCells?.length ? trapRegionData(k.trapData, k.trapCells, gs, `room-${k.roomId}`) : []));
+  if (regions.length) await scene.createEmbeddedDocuments("Region", regions);
 
   if (opts.activate) await scene.activate();
   else await scene.view();

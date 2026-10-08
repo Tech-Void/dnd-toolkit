@@ -16,7 +16,7 @@ export interface ParsedEntry {
   paragraphs: string[];
   activation?: { type: "action" | "bonus" | "reaction" | "minute" | "hour" | "legendary" | "special"; cost: number; condition?: string };
   range?: { value: number | null; long?: number | null; units: "ft" | "mi" | "self" | "touch" | "spec" | "any" };
-  target?: { value: number; width?: number; type: AreaShape; units: "ft" };
+  target?: { value: number; width?: number; type: AreaShape | "creature"; units: "ft" | "" };
   duration?: { value: number | null; units: "inst" | "turn" | "round" | "minute" | "hour" | "day" | "perm" | "spec" };
   concentration?: boolean;
   actionType?: "mwak" | "rwak" | "msak" | "rsak" | "save" | "heal" | "util";
@@ -47,6 +47,8 @@ export interface ParsedEntry {
     bonus?: number;
     effects: ForgeEffect[];
   };
+  /** Effects the spell or feature puts on its targets (applied from the chat card). */
+  targetEffects?: ForgeEffect[];
   warnings: string[];
 }
 
@@ -224,6 +226,30 @@ function parseAttack(text: string): Pick<ParsedEntry, "actionType" | "attackBonu
   return {};
 }
 
+/** Bonuses a spell or feature grants its targets: "+1 bonus to attack rolls it makes with ranged weapons". */
+function parseTargetEffects(text: string): ForgeEffect[] {
+  const effects: ForgeEffect[] = [];
+  for (const m of text.matchAll(/(?:a )?([+-]\d+|\d+d\d+) bonus to (attack|damage) rolls(?: (?:it|they|you|the target) makes?)?(?: with (melee|ranged|spell)? ?(?:weapons?|weapon attacks|attacks|spells?))?/gi)) {
+    const value = m[1]!.startsWith("-") || m[1]!.startsWith("+") ? m[1]! : `+${m[1]}`;
+    const what = m[2]!.toLowerCase();
+    const kind = (m[3] ?? "").toLowerCase();
+    const keys = kind === "ranged" ? ["rwak"] : kind === "melee" ? ["mwak"] : kind === "spell" ? ["msak", "rsak"] : ["mwak", "rwak", "msak", "rsak"];
+    for (const k of keys) effects.push({ label: `${what === "attack" ? "Attack" : "Damage"} bonus`, key: `system.bonuses.${k}.${what}`, mode: "add", value });
+  }
+  const ac = /([+-]\d+) bonus to (?:its |their |your )?AC/i.exec(text);
+  if (ac) effects.push({ label: "AC bonus", key: "system.attributes.ac.bonus", mode: "add", value: ac[1]! });
+  const saves = /(?:a )?([+-]\d+|\d+d\d+) bonus to (?:all )?saving throws/i.exec(text);
+  if (saves) effects.push({ label: "Save bonus", key: "system.bonuses.abilities.save", mode: "add", value: saves[1]!.startsWith("+") || saves[1]!.startsWith("-") ? saves[1]! : `+${saves[1]}` });
+  const checks = /(?:a )?([+-]\d+|\d+d\d+) bonus to (?:all )?ability checks/i.exec(text);
+  if (checks) effects.push({ label: "Check bonus", key: "system.bonuses.abilities.check", mode: "add", value: checks[1]!.startsWith("+") || checks[1]!.startsWith("-") ? checks[1]! : `+${checks[1]}` });
+  const speed = /speed increases by (\d+) feet/i.exec(text);
+  if (speed) effects.push({ label: "Speed", key: "system.attributes.movement.walk", mode: "add", value: speed[1]! });
+  for (const m of text.matchAll(/(?:has|gains?|have) resistance to (acid|bludgeoning|cold|fire|force|lightning|necrotic|piercing|poison|psychic|radiant|slashing|thunder) damage/gi)) {
+    effects.push({ label: `${m[1]!.toLowerCase()} resistance`, key: "system.traits.dr.value", mode: "add", value: m[1]!.toLowerCase() });
+  }
+  return effects;
+}
+
 /** Worn and wielded bonuses as Active Effect changes. */
 function parseEffects(text: string, isArmor: boolean): { bonus?: number; effects: ForgeEffect[]; warnings: string[] } {
   const effects: ForgeEffect[] = [];
@@ -289,11 +315,14 @@ function field(lines: string[], ...labels: string[]): string | undefined {
       if (!m) continue;
       if (m[1]) return m[1];
       const next = lines.slice(i + 1).find((l) => l);
-      if (next) return next;
+      if (next && isShortValue(next)) return next;
     }
   }
   return undefined;
 }
+
+/** A D&D Beyond field value ("1 Action", "DEX Save", "Fire"), as opposed to a sentence of description. */
+const isShortValue = (line: string) => line.length <= 40 && line.split(" ").length <= 5 && !STAT_LINE.test(line);
 
 const STAT_LINE = /^(Casting Time|Range(?:\/Area)?|Components|Duration|Level|School|Attack\/Save|Damage\/Effect|Classes)\b/i;
 
@@ -391,7 +420,7 @@ function parseSpell(lines: string[], forcedName?: string): ParsedEntry {
       skip.add(i);
       if (!/:/.test(l) || /:\s*$/.test(l)) {
         const next = lines.findIndex((x, j) => j > i && x);
-        if (next > 0) skip.add(next);
+        if (next > 0 && isShortValue(lines[next]!)) skip.add(next);
       }
     }
   });
@@ -427,10 +456,20 @@ function parseSpell(lines: string[], forcedName?: string): ParsedEntry {
     if (size && shape) entry.target = { value: Number(size), type: shape.toLowerCase() as AreaShape, units: "ft" };
   }
   if (!entry.actionType) entry.actionType = "util";
+  // No area: "up to three creatures" / "one creature you touch" is the target count.
+  if (!entry.target) {
+    const COUNT: Record<string, number> = { one: 1, a: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
+    const who = /\b(?:up to )?(one|a|two|three|four|five|six|seven|eight|nine|ten|\d+) (?:willing |other )?creatures?\b/i.exec(text);
+    if (who) entry.target = { value: COUNT[who[1]!.toLowerCase()] ?? Number(who[1]), type: "creature", units: "" };
+  }
+  const buffs = parseTargetEffects(text);
+  if (buffs.length) entry.targetEffects = buffs;
+  if (/(?:normal and long )?range of .* (?:is|are) doubled/i.test(text)) entry.warnings.push("Doubled weapon range isn't something an effect can do: track it by hand.");
 
   // Upcasting and cantrip scaling.
   const higher = /(?:damage|healing) increases by (\d+d\d+) for each (?:spell )?slot level above/i.exec(text);
   const cantrip = /damage increases by (\d+d\d+) when you reach (?:5th level|character level 5|levels? 5)/i.exec(text);
+  if (/additional creature for each (?:spell )?slot level above/i.test(text)) entry.warnings.push("Upcasting adds targets: nothing to automate, just pick more targets.");
   if (header?.level === 0 && cantrip) entry.spell!.scaling = { mode: "cantrip", formula: cantrip[1]! };
   else if (higher) entry.spell!.scaling = { mode: "level", formula: higher[1]! };
   else if (header?.level === 0 && entry.damage.length) entry.spell!.scaling = { mode: "cantrip", formula: entry.damage[0]![0].replace(/^\d+/, "1") };
@@ -543,7 +582,8 @@ export function parsedFacts(e: ParsedEntry): [string, string][] {
   }
   if (e.activation) facts.push(["Use", `${e.activation.cost > 1 ? `${e.activation.cost} ` : ""}${e.activation.type}${e.activation.condition ? `, ${e.activation.condition}` : ""}`]);
   if (e.range) facts.push(["Range", e.range.value ? `${e.range.value}${e.range.long ? `/${e.range.long}` : ""} ${e.range.units}` : e.range.units]);
-  if (e.target) facts.push(["Area", `${e.target.value}-ft ${e.target.type}${e.target.width ? `, ${e.target.width} ft wide` : ""}`]);
+  if (e.target?.type === "creature") facts.push(["Targets", `${e.target.value} creature${e.target.value > 1 ? "s" : ""}`]);
+  else if (e.target) facts.push(["Area", `${e.target.value}-ft ${e.target.type}${e.target.width ? `, ${e.target.width} ft wide` : ""}`]);
   if (e.duration) facts.push(["Duration", `${e.concentration ? "Concentration, " : ""}${e.duration.value ? `${e.duration.value} ${e.duration.units}` : e.duration.units}`]);
   if (e.attackBonus !== undefined) facts.push(["Attack", `+${e.attackBonus} (${e.actionType})`]);
   else if (e.actionType && e.actionType !== "util") facts.push(["Roll", e.actionType]);
@@ -552,5 +592,6 @@ export function parsedFacts(e: ParsedEntry): [string, string][] {
   if (e.spell?.scaling) facts.push(["Scaling", `+${e.spell.scaling.formula} per ${e.spell.scaling.mode === "level" ? "slot level" : "cantrip tier"}`]);
   if (e.uses) facts.push(["Uses", `${e.uses.max}/${e.uses.per}${e.uses.recovery ? `, regains ${e.uses.recovery}` : ""}`]);
   if (e.recharge) facts.push(["Recharge", `${e.recharge}-6`]);
+  if (e.targetEffects?.length) facts.push(["Grants", [...new Set(e.targetEffects.map((f) => `${f.label} ${f.value}`))].join(", ")]);
   return facts;
 }

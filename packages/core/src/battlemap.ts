@@ -1,12 +1,14 @@
 import { createRng, valueNoise as noise, type Rng } from "./rng.ts";
 import type { WallSegment } from "./dungeon.ts";
+import { lockText, type DoorLock } from "./locks.ts";
+import { generateTrap, trapText, type Trap } from "./traps.ts";
 import { floorOutlines, loopWalls, smoothLoop, type Point } from "./outline.ts";
 
 // ---------------------------------------------------------------------------
 // Small, single-fight battlemaps: a clearing, a shop floor, a cave grotto...
 // Everything is in grid cells; the Foundry importer turns it into a scene.
 
-export type BattlemapSetting = "clearing" | "road" | "cave" | "shop" | "tavern" | "ruins" | "camp";
+export type BattlemapSetting = "clearing" | "road" | "cave" | "shop" | "tavern" | "ruins" | "camp" | "town";
 export type BattlemapSize = "small" | "medium" | "large";
 
 export const BATTLEMAP_SETTINGS: Record<BattlemapSetting, { label: string; outdoor: boolean }> = {
@@ -17,7 +19,27 @@ export const BATTLEMAP_SETTINGS: Record<BattlemapSetting, { label: string; outdo
   tavern: { label: "Tavern", outdoor: false },
   ruins: { label: "Ruins", outdoor: true },
   camp: { label: "Bandit camp", outdoor: true },
+  town: { label: "Town streets", outdoor: true },
 };
+
+export type TownSize = "hamlet" | "village" | "town" | "city";
+/** Map size and number of cross streets per town size. */
+const TOWN_SIZES: Record<TownSize, [w: number, h: number, crossStreets: number]> = {
+  hamlet: [30, 22, 0], village: [40, 30, 1], town: [52, 38, 2], city: [64, 46, 3],
+};
+
+/** A building on a town map. Its interior is the region with this id; its roof is drawn separately. */
+export interface TownBuilding {
+  id: number;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  /** The floor cell just inside the front door. */
+  door: Cell;
+  kind: "house" | "shop" | "inn" | "temple" | "hall";
+  label?: string;
+}
 
 const SIZES: Record<BattlemapSize, [number, number]> = { small: [20, 15], medium: [28, 20], large: [36, 26] };
 
@@ -26,7 +48,7 @@ export type Ground = "grass" | "dirt" | "road" | "stone" | "wood" | "cave" | "wa
 export type PropKind =
   | "tree" | "bush" | "boulder" | "log" | "stalagmite" | "mushrooms" | "rubble" | "pillar" | "altar"
   | "table" | "chair" | "barrel" | "crate" | "counter" | "shelf" | "bed" | "chest" | "hearth" | "rug" | "stairs"
-  | "campfire" | "tent" | "cart";
+  | "campfire" | "tent" | "cart" | "well";
 
 /** none: walk through it. move: blocks movement only. all: blocks movement and sight (gets walls). */
 export type Blocks = "none" | "move" | "all";
@@ -80,6 +102,15 @@ export interface Battlemap {
   notes: string[];
   /** Smoothed outline of the open floor (caves); the walls follow it. */
   outlines?: Point[][];
+  /** Town maps: the buildings, whose roofs go on an overhead layer. */
+  buildings?: TownBuilding[];
+  /** Traps on the ground: the squares that set each one off. */
+  traps?: PlacedTrap[];
+}
+
+export interface PlacedTrap {
+  cells: Cell[];
+  trap: Trap;
 }
 
 export interface BattlemapOptions {
@@ -88,6 +119,14 @@ export interface BattlemapOptions {
   night?: boolean;
   /** Title for the map, e.g. the shop's name. */
   title?: string;
+  /** Town maps: how big a place. */
+  townSize?: TownSize;
+  /** Lock storerooms, back doors and houses. Default true. */
+  locks?: boolean;
+  /** Hide traps where they make sense (camps, roads, ruins, caves). Default false. */
+  traps?: boolean;
+  /** For trap damage and lock DCs. Default 3. */
+  partyLevel?: number;
   seed?: string | number;
 }
 
@@ -118,6 +157,7 @@ const PROP_RULES: Record<PropKind, Omit<Prop, "kind" | "x" | "y" | "w" | "h">> =
   campfire: { blocks: "none" },
   tent: { blocks: "all", cover: "three-quarters" },
   cart: { blocks: "move", cover: "three-quarters" },
+  well: { blocks: "move", cover: "half" },
 };
 
 /** Props drawn under everything else; they don't take up their cells. */
@@ -133,6 +173,8 @@ const GLOW: Omit<BattleLight, "x" | "y"> = { bright: 0, dim: 10, color: "#4fd1c5
 /** -1 solid rock, 0 open/outside, 1+ rooms of a building. Walls go between cells of different regions. */
 type Region = number;
 type Opening = "door" | "window";
+/** What a door is for, which decides whether it's locked. */
+type DoorRole = "front" | "store" | "back" | "kitchen" | "house";
 
 interface PlaceOptions {
   /** Only on these ground types. */
@@ -151,6 +193,7 @@ class Builder {
   readonly props: Prop[] = [];
   readonly lights: BattleLight[] = [];
   readonly openings = new Map<string, Opening>();
+  readonly doorRoles = new Map<string, DoorRole>();
   /** Free-standing wall runs, e.g. broken ruin walls (edge keys). */
   readonly extraWalls = new Set<string>();
   readonly notes = new Set<string>();
@@ -229,8 +272,9 @@ class Builder {
   }
 
   /** Door or window on the edge between two neighboring cells; the cells either side stay clear. */
-  opening(a: Cell, b: Cell, kind: Opening) {
+  opening(a: Cell, b: Cell, kind: Opening, role?: DoorRole) {
     this.openings.set(edgeKey(a, b), kind);
+    if (role) this.doorRoles.set(edgeKey(a, b), role);
     for (const [x, y] of [a, b]) if (this.inside(x, y)) this.used[y]![x] = true;
   }
 }
@@ -500,7 +544,7 @@ function building(b: Builder): Hall {
   b.room(hall.x, hall.y, hall.w, hall.h, 1, "wood");
   const bottom = hall.y + hall.h - 1;
   const doorX = hall.x + b.rng.int(Math.floor(hall.w * 0.25), Math.floor(hall.w * 0.75));
-  b.opening([doorX, bottom], [doorX, bottom + 1], "door");
+  b.opening([doorX, bottom], [doorX, bottom + 1], "door", "front");
   hall.door = [doorX, bottom];
   // Windows along the front, away from the door.
   for (let x = hall.x + 2; x < hall.x + hall.w - 2; x += b.rng.int(3, 5)) {
@@ -526,10 +570,10 @@ function shop(b: Builder) {
   b.room(hall.x, hall.y, hall.w, depth, 2, "wood");
   const partY = hall.y + depth;
   const storeDoor = b.rng.chance(0.5) ? hall.x + 1 : hall.x + hall.w - 2;
-  b.opening([storeDoor, partY - 1], [storeDoor, partY], "door");
+  b.opening([storeDoor, partY - 1], [storeDoor, partY], "door", "store");
   if (b.rng.chance(0.6)) {
     const backX = hall.x + b.rng.int(2, hall.w - 3);
-    b.opening([backX, hall.y], [backX, hall.y - 1], "door");
+    b.opening([backX, hall.y], [backX, hall.y - 1], "door", "back");
   }
   // Counter across the shop floor with a gap at the storeroom door's side.
   const counterY = partY + 2;
@@ -567,7 +611,7 @@ function tavern(b: Builder) {
   b.room(kx, hall.y, kw, Math.floor(hall.h * 0.6), 2, "stone");
   const partX = kitchenLeft ? kx + kw : kx - 1;
   const kdoorY = hall.y + b.rng.int(1, Math.floor(hall.h * 0.6) - 2);
-  b.opening([partX, kdoorY], [kitchenLeft ? partX - 1 : partX + 1, kdoorY], "door");
+  b.opening([partX, kdoorY], [kitchenLeft ? partX - 1 : partX + 1, kdoorY], "door", "kitchen");
   // Kitchen hearth against the back wall.
   const stoveX = kx + b.rng.int(1, kw - 3);
   if (b.place("hearth", stoveX, hall.y, 2, 1, { region: 2 })) b.light(stoveX + 1, hall.y + 0.5, FIRE);
@@ -611,6 +655,103 @@ function tavern(b: Builder) {
   lamps(b, hall.x, hall.y, hall.w, hall.h, 3);
   b.notes.add("Tables can be tipped over (bonus action) for half cover. Chairs and stools make improvised weapons (1d4).");
   b.notes.add("The bar gives half cover; vaulting it costs 5 extra feet of movement. Shoving someone into a hearth deals 1d6 fire damage.");
+}
+
+// ---------------------------------------------------------------------------
+// Towns
+
+function town(b: Builder, size: TownSize): TownBuilding[] {
+  const { rng } = b;
+  meadow(b);
+  const [, , crosses] = TOWN_SIZES[size];
+  // Main street, east to west.
+  const midY = Math.floor(b.h / 2) + rng.int(-1, 1);
+  for (let x = 0; x < b.w; x++) for (let y = midY - 1; y <= midY + 1; y++) b.ground[y]![x] = "road";
+  // Cross streets, north to south.
+  const crossXs: number[] = [];
+  for (let i = 0; i < crosses; i++) {
+    const x = Math.floor(((i + 1) * b.w) / (crosses + 1)) + rng.int(-2, 2);
+    crossXs.push(x);
+    for (let y = 0; y < b.h; y++) for (let dx = 0; dx < 2; dx++) b.ground[y]![x + dx] = "road";
+  }
+  // A cobbled square where the main street meets the first cross street, with a well and market stalls.
+  const sqX = (crossXs[0] ?? Math.floor(b.w / 2)) + 1;
+  const sqW = size === "city" ? 11 : size === "town" ? 9 : size === "village" ? 7 : 0;
+  if (sqW) {
+    const sqH = sqW - 2;
+    for (let y = midY - Math.floor(sqH / 2); y <= midY + Math.floor(sqH / 2); y++) {
+      for (let x = sqX - Math.floor(sqW / 2); x <= sqX + Math.floor(sqW / 2); x++) if (b.inside(x, y)) b.ground[y]![x] = "stone";
+    }
+    b.place("well", sqX, midY - Math.floor(sqH / 2) + 1);
+    b.scatter("table", Math.round(sqW / 2), () => [1, 1], (x, y) => Math.abs(x - sqX) <= sqW / 2 - 1 && Math.abs(y - midY) <= sqH / 2 && Math.abs(y - midY) >= 2, { ground: ["stone"] });
+    b.scatter("crate", 3, () => [1, 1], (x, y) => Math.abs(x - sqX) <= sqW / 2 && Math.abs(y - midY) <= sqH / 2, { ground: ["stone"] });
+    b.scatter("barrel", 2, () => [1, 1], (x, y) => Math.abs(x - sqX) <= sqW / 2 && Math.abs(y - midY) <= sqH / 2, { ground: ["stone"] });
+  } else {
+    b.place("well", sqX, midY - 3);
+  }
+
+  // Lots along the streets. A lot needs a clear ring of open ground around it.
+  const buildings: TownBuilding[] = [];
+  let id = 1;
+  /** Build on a lot if it (and a ring around it) is open ground; returns whether it did. */
+  const lot = (x: number, y: number, w: number, h: number, door: Cell, outside: Cell): boolean => {
+    for (let cy = y - 1; cy <= y + h; cy++) {
+      for (let cx = x - 1; cx <= x + w; cx++) {
+        if (cx < 1 || cy < 1 || cx >= b.w - 1 || cy >= b.h - 1) return false;
+        if (!["grass", "dirt"].includes(b.ground[cy]![cx]!) || b.region[cy]![cx] !== 0 || b.used[cy]![cx]) return false;
+      }
+    }
+    b.room(x, y, w, h, id, "wood");
+    b.opening(door, outside, "door", "house");
+    // A window on the back wall.
+    const back: [Cell, Cell] = outside[1] > door[1] ? [[x + Math.floor(w / 2), y], [x + Math.floor(w / 2), y - 1]]
+      : outside[1] < door[1] ? [[x + Math.floor(w / 2), y + h - 1], [x + Math.floor(w / 2), y + h]]
+      : outside[0] > door[0] ? [[x, y + Math.floor(h / 2)], [x - 1, y + Math.floor(h / 2)]]
+      : [[x + w - 1, y + Math.floor(h / 2)], [x + w, y + Math.floor(h / 2)]];
+    b.opening(back[0], back[1], "window");
+    buildings.push({ id, x, y, w, h, door, kind: "house" });
+    id++;
+    return true;
+  };
+  for (const side of [-1, 1]) {
+    for (let x = rng.int(1, 3); x < b.w - 5; ) {
+      const lw = rng.int(4, 7);
+      const lh = rng.int(4, 6);
+      const gap = rng.int(0, 1);
+      const dx = x + Math.floor(lw / 2);
+      const y0 = side < 0 ? midY - 2 - gap - lh : midY + 2 + gap;
+      const built = side < 0 ? lot(x, y0, lw, lh, [dx, y0 + lh - 1], [dx, y0 + lh]) : lot(x, y0, lw, lh, [dx, y0], [dx, y0 - 1]);
+      // Slide along until something fits, then leave a gap.
+      x += built ? lw + rng.int(1, 3) : 1;
+    }
+  }
+  for (const cx of crossXs) {
+    for (const side of [-1, 1]) {
+      for (let y = rng.int(1, 3); y < b.h - 5; ) {
+        const lw = rng.int(4, 6);
+        const lh = rng.int(4, 6);
+        const gap = rng.int(0, 1);
+        const dy = y + Math.floor(lh / 2);
+        const x0 = side < 0 ? cx - 1 - gap - lw : cx + 2 + gap;
+        const built = side < 0 ? lot(x0, y, lw, lh, [x0 + lw - 1, dy], [x0 + lw, dy]) : lot(x0, y, lw, lh, [x0, dy], [x0 - 1, dy]);
+        y += built ? lh + rng.int(1, 3) : 1;
+      }
+    }
+  }
+  // A little furniture in each building.
+  for (const bld of buildings) {
+    b.scatter("table", 1, () => [1, 1], undefined, { region: bld.id });
+    b.scatter("chair", rng.int(1, 2), () => [1, 1], undefined, { region: bld.id });
+    b.scatter(rng.chance(0.5) ? "bed" : "barrel", 1, () => [1, 1], undefined, { region: bld.id });
+  }
+  // Trees and bushes in the open ground, lamps along the main street.
+  treeLine(b, 2, (x, y) => b.ground[y]![x] === "road");
+  b.scatter("tree", Math.round((b.w * b.h) / 160), () => [1, 1], undefined, { ground: ["grass", "dirt"], region: 0 });
+  b.scatter("bush", Math.round((b.w * b.h) / 90), () => [1, 1], undefined, { ground: ["grass", "dirt"], region: 0 });
+  for (let x = 3; x < b.w; x += 8) b.light(x + 0.5, midY - 1.5, LAMP);
+  b.notes.add("Buildings have roofs on an overhead layer: a building's inside stays hidden until someone can see in through its door or windows.");
+  b.notes.add("Market stalls and crates give half cover; the well blocks movement.");
+  return buildings;
 }
 
 // ---------------------------------------------------------------------------
@@ -695,6 +836,7 @@ function transpose(m: Battlemap): Battlemap {
     lights: m.lights.map(sw),
     outlines: m.outlines?.map((loop) => loop.map(([x, y]): Point => [y, x])),
     zones: { party: m.zones.party.map(([x, y]): Cell => [y, x]), enemies: m.zones.enemies.map(([x, y]): Cell => [y, x]) },
+    traps: m.traps?.map((t) => ({ ...t, cells: t.cells.map(([x, y]): Cell => [y, x]) })),
   };
 }
 
@@ -706,19 +848,24 @@ const TITLES: Record<BattlemapSetting, string[]> = {
   tavern: ["The Prancing Stag", "The Rusty Tankard", "The Sleeping Giant", "The Gilded Goose", "The Drowned Rat", "The Wayfarer's Rest"],
   ruins: ["Ruined chapel", "Old watchtower ruins", "Forgotten shrine", "Crumbling keep"],
   camp: ["Bandit camp", "Raiders' camp", "Smugglers' camp"],
+  town: ["Market street", "Town square", "Main street"],
 };
 
 export function generateBattlemap(opts: BattlemapOptions = {}): Battlemap {
   const rng = createRng(opts.seed);
-  const setting = !opts.setting || opts.setting === "random" ? rng.pick(Object.keys(BATTLEMAP_SETTINGS) as BattlemapSetting[]) : opts.setting;
-  const [w, h] = SIZES[opts.size ?? "medium"];
+  // Towns are their own thing (sized by the town, not the battlemap size), so random never picks one.
+  const setting = !opts.setting || opts.setting === "random" ? rng.pick((Object.keys(BATTLEMAP_SETTINGS) as BattlemapSetting[]).filter((s) => s !== "town")) : opts.setting;
+  const townSize = opts.townSize ?? (opts.size === "small" ? "hamlet" : opts.size === "large" ? "town" : "village");
+  const [w, h] = setting === "town" ? TOWN_SIZES[townSize].slice(0, 2) as [number, number] : SIZES[opts.size ?? "medium"];
   const night = !!opts.night;
 
   // A few tries in case props leave the enemies unreachable (rare, since blocking props keep a clear ring).
   for (let attempt = 0; ; attempt++) {
     const b = new Builder(createRng(`${rng.seed}:${attempt}`), w, h, setting === "cave" ? "rock" : "grass");
     let enemyArea: ((x: number, y: number) => boolean) | undefined;
-    if (setting === "clearing") clearing(b);
+    let buildings: TownBuilding[] | undefined;
+    if (setting === "town") buildings = town(b, townSize);
+    else if (setting === "clearing") clearing(b);
     else if (setting === "road") enemyArea = road(b);
     else if (setting === "cave") cave(b);
     else if (setting === "shop" || setting === "tavern") {
@@ -727,7 +874,7 @@ export function generateBattlemap(opts: BattlemapOptions = {}): Battlemap {
       enemyArea = (x, y) => b.region[y]![x]! >= 1;
     }
     else if (setting === "ruins") ruins(b);
-    else enemyArea = camp(b);
+    else if (setting === "camp") enemyArea = camp(b);
 
     const edges = wallEdges(b);
     // Caves get rounded rock faces instead of stair-stepped cell edges.
@@ -771,11 +918,87 @@ export function generateBattlemap(opts: BattlemapOptions = {}): Battlemap {
       darkness: setting === "cave" ? 1 : night ? (outdoor ? 0.75 : 0.6) : 0,
       zones: { party: b.rng.shuffle(party), enemies: enemyCells },
       notes: [...b.notes],
+      buildings,
     };
-    // Outdoor maps can run top-to-bottom too.
-    if (outdoor && b.rng.chance(0.5)) map = transpose(map);
+    // Locks and traps roll on their own stream, so they don't change the layout of a seed.
+    const extra = createRng(`${rng.seed}:extras`);
+    if (opts.locks !== false) lockBattlemap(map, b.doorRoles, extra, opts.partyLevel ?? 3);
+    if (opts.traps) trapBattlemap(map, extra, opts.partyLevel ?? 3);
+    // Outdoor maps can run top-to-bottom too (towns keep their streets as laid out).
+    if (outdoor && setting !== "town" && b.rng.chance(0.5)) map = transpose(map);
     return map;
   }
+}
+
+/** Storerooms and back doors get locked or barred, house doors often locked; front doors stay open. */
+function lockBattlemap(m: Battlemap, roles: Map<string, DoorRole>, rng: Rng, level: number) {
+  const pick = () => rng.pick([12, 13, 14, 15, 15, 16]) + (level >= 11 ? 3 : level >= 5 ? 1 : 0);
+  const notes: string[] = [];
+  let houses = 0;
+  let houseDc = 0;
+  for (const w of m.walls) {
+    if (!w.door) continue;
+    const role = roles.get(w.y1 === w.y2 ? `h:${w.x1},${w.y1}` : `v:${w.x1},${w.y1}`);
+    let lock: DoorLock | undefined;
+    if (role === "store" && rng.chance(0.6)) {
+      const dc = pick();
+      lock = { kind: "locked", pickDc: dc, forceDc: dc + rng.int(1, 3), rooms: [0, 0], key: `the ${m.setting === "shop" ? "shopkeeper" : "owner"}'s key ring` };
+      notes.push(`Storeroom door: ${lockText(lock)}`);
+    } else if (role === "back" && rng.chance(0.5)) {
+      lock = { kind: "barred", forceDc: rng.int(16, 20), rooms: [0, 0], barredFrom: "inside" };
+      notes.push(`Back door: ${lockText(lock)}`);
+    } else if (role === "kitchen" && rng.chance(0.12)) {
+      lock = { kind: "stuck", forceDc: rng.int(8, 12), rooms: [0, 0] };
+      notes.push(`Kitchen door: ${lockText(lock)}`);
+    } else if (role === "house" && rng.chance(0.45)) {
+      houseDc ||= pick();
+      lock = { kind: "locked", pickDc: houseDc, forceDc: houseDc + 2, rooms: [0, 0], key: "the owner's key" };
+      houses++;
+    }
+    if (lock) w.lock = lock;
+  }
+  if (houses) notes.push(`${houses} house door${houses === 1 ? " is" : "s are"} locked (DC ${houseDc} thieves' tools, DC ${houseDc + 2} Strength (Athletics) to force; the owners have keys).`);
+  m.notes.push(...notes);
+}
+
+/** Where traps fit, and whether they're outdoor snares or old dungeon works. */
+const TRAP_SETTINGS: Partial<Record<BattlemapSetting, { count: [number, number]; wild: boolean }>> = {
+  camp: { count: [1, 3], wild: true }, road: { count: [1, 2], wild: true }, clearing: { count: [0, 2], wild: true },
+  ruins: { count: [1, 2], wild: false }, cave: { count: [1, 2], wild: false },
+};
+
+/** Hide traps on open ground the party is likely to cross: nearer the enemy than the party, off the props. */
+function trapBattlemap(m: Battlemap, rng: Rng, level: number) {
+  const plan = TRAP_SETTINGS[m.setting];
+  if (!plan) return;
+  const taken = new Set<string>();
+  for (const p of m.props) for (let y = p.y; y < p.y + p.h; y++) for (let x = p.x; x < p.x + p.w; x++) taken.add(`${x},${y}`);
+  for (const [x, y] of m.zones.party.slice(0, 12)) taken.add(`${x},${y}`);
+  for (const [x, y] of m.zones.enemies.slice(0, 6)) taken.add(`${x},${y}`);
+  const reach = reachableCells(m, m.zones.party.slice(0, 1));
+  const mean = (cells: Cell[]) => cells.reduce(([sx, sy], [x, y]) => [sx + x / cells.length, sy + y / cells.length], [0, 0]);
+  const [px, py] = mean(m.zones.party.slice(0, 8));
+  const [ex, ey] = mean(m.zones.enemies.slice(0, 8));
+  const open = (x: number, y: number) => reach.has(`${x},${y}`) && !taken.has(`${x},${y}`) && !["water", "rock"].includes(m.ground[y]?.[x] ?? "rock");
+  // On the way in: closer to the enemies than to the party.
+  const spots = [...reach].map((k) => k.split(",").map(Number) as Cell)
+    .filter(([x, y]) => open(x, y) && Math.hypot(x - ex, y - ey) < Math.hypot(x - px, y - py) && Math.hypot(x - ex, y - ey) > 2);
+  const traps: PlacedTrap[] = [];
+  for (let i = rng.int(...plan.count); i > 0 && spots.length; i--) {
+    const trap = generateTrap({ partyLevel: level, wild: plan.wild, rough: !plan.wild, step: true, seed: `${rng.seed}:trap:${i}` });
+    const [x, y] = spots.splice(rng.int(0, spots.length - 1), 1)[0]!;
+    let cells: Cell[] = [[x, y]];
+    if (/(10|15)-foot square/.test(trap.area ?? "")) {
+      const block: Cell[] = [[x, y], [x + 1, y], [x, y + 1], [x + 1, y + 1]];
+      if (block.every(([cx, cy]) => open(cx, cy))) cells = block;
+    }
+    for (const [cx, cy] of cells) taken.add(`${cx},${cy}`);
+    // Keep the next trap out of this one's neighborhood.
+    for (let j = spots.length - 1; j >= 0; j--) if (Math.abs(spots[j]![0] - x) <= 3 && Math.abs(spots[j]![1] - y) <= 3) spots.splice(j, 1);
+    traps.push({ cells, trap });
+    m.notes.push(`Trap: ${trapText(trap)}`);
+  }
+  if (traps.length) m.traps = traps;
 }
 
 function cellsWhere(b: Builder, test: (x: number, y: number) => boolean): Cell[] {

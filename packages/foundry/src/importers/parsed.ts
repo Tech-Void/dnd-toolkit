@@ -120,6 +120,23 @@ export async function parsedItemData(e: ParsedEntry): Promise<any> {
   if (e.save) sys.save = { ability: e.save.ability, dc: e.save.dc ?? null, scaling: e.save.dc ? "flat" : "spell" };
   if (e.uses) sys.uses = { ...sys.uses, value: e.uses.max, max: String(e.uses.max), per: e.uses.per, recovery: e.uses.recovery ?? "" };
   if (e.recharge) sys.recharge = { value: e.recharge, charged: true };
+  // Buffs for the targets: not transferred to the caster, applied from the chat card, lasting the spell's duration.
+  if (e.targetEffects?.length) {
+    const MODES = CONST.ACTIVE_EFFECT_MODES;
+    const SECONDS: Record<string, number> = { round: 6, turn: 6, minute: 60, hour: 3600, day: 86400 };
+    const seconds = e.duration?.value ? e.duration.value * (SECONDS[e.duration.units] ?? 0) : undefined;
+    data.effects = [
+      ...(data.effects ?? []),
+      {
+        name: e.name,
+        img: data.img,
+        transfer: false,
+        disabled: false,
+        duration: seconds ? { seconds } : {},
+        changes: e.targetEffects.map((f) => ({ key: f.key, mode: f.mode === "add" ? MODES.ADD : f.mode === "upgrade" ? MODES.UPGRADE : MODES.OVERRIDE, value: f.value })),
+      },
+    ];
+  }
   return data;
 }
 

@@ -6,6 +6,44 @@ export interface BattlemapRenderOptions {
   cell: number;
   /** GM preview extras: party (blue) and enemy (red) start zones, plus a faint grid. */
   preview?: boolean;
+  /** Paint town roofs on top (the preview); scenes put them on an overhead tile instead. */
+  roofs?: boolean;
+  /** Number each building on its roof (GM preview). */
+  labels?: boolean;
+  /** Photo textures per ground type; ground without one keeps the painted look. */
+  textures?: Partial<Record<Ground, CanvasImageSource & { width: number }>>;
+  /** How many grid squares one texture tile spans (default 4). */
+  textureCells?: number;
+  /** Painted prop images per kind (several variants each); kinds without art keep the drawn look. */
+  props?: Partial<Record<Prop["kind"], PropArt[]>>;
+}
+
+type PropArt = CanvasImageSource & { width: number; height: number };
+
+/** How big each kind of prop art is drawn, relative to its footprint (trees spread their canopy wide). */
+const ART_SCALE: Partial<Record<Prop["kind"], number>> = {
+  tree: 1.75, bush: 1.3, boulder: 1.15, stalagmite: 1.1, mushrooms: 0.95, crate: 0.95, chest: 0.85, barrel: 0.8,
+  chair: 0.75, pillar: 1.05, altar: 1, bed: 1, log: 1,
+};
+
+/** Draw a prop with painted art: a seeded variant, fitted to its footprint, aspect kept. */
+function drawPropArt(ctx: Ctx, rng: Rng, p: Prop, c: number, variants: PropArt[]) {
+  const img = rng.pick(variants);
+  const cx = (p.x + p.w / 2) * c;
+  const cy = (p.y + p.h / 2) * c;
+  const jitter = 0.92 + rng.next() * 0.16;
+  // Long props (logs, beds, altars) run along their footprint; turn the art if it faces the other way.
+  const longProp = p.w !== p.h;
+  const turn = longProp && (p.w > p.h) !== (img.width > img.height);
+  const boxW = (longProp ? p.w : Math.max(p.w, p.h)) * c * (ART_SCALE[p.kind] ?? 1) * jitter;
+  const boxH = (longProp ? p.h : Math.max(p.w, p.h)) * c * (ART_SCALE[p.kind] ?? 1) * jitter;
+  const [iw, ih] = turn ? [img.height, img.width] : [img.width, img.height];
+  const k = longProp ? Math.max(boxW / iw, boxH / ih) * 0.95 : Math.min(boxW / iw, boxH / ih);
+  ctx.save();
+  ctx.translate(cx, cy);
+  if (turn) ctx.rotate(Math.PI / 2);
+  ctx.drawImage(img, (-img.width * k) / 2, (-img.height * k) / 2, img.width * k, img.height * k);
+  ctx.restore();
 }
 
 type Ctx = CanvasRenderingContext2D;
@@ -173,14 +211,22 @@ const RIMS: Partial<Record<Ground, [string, number][]>> = {
   dirt: [["rgba(80, 60, 35, 0.15)", 0.08]],
 };
 
-function drawGround(ctx: Ctx, rng: Rng, m: Battlemap, c: number) {
+function drawGround(ctx: Ctx, rng: Rng, m: Battlemap, c: number, o: Pick<BattlemapRenderOptions, "textures" | "textureCells"> = {}) {
+  /** A repeating fill for a ground type's texture, scaled so one tile spans a few squares. */
+  const pattern = (g: Ground): CanvasPattern | null => {
+    const img = o.textures?.[g];
+    if (!img) return null;
+    const p = ctx.createPattern(img, "repeat");
+    p?.setTransform(new DOMMatrix().scale((c * (o.textureCells ?? 4)) / img.width));
+    return p;
+  };
   const counts = new Map<Ground, number>();
   for (const row of m.ground) for (const g of row) counts.set(g, (counts.get(g) ?? 0) + 1);
   // The most common ground is the backdrop; everything else is painted over it as smooth patches.
   const base = [...counts].sort((a, b) => b[1] - a[1])[0]![0];
   if (m.setting === "cave") ctx.drawImage(stoneTexture(m.width, m.height, `${m.seed}:rock`, ROCK_STYLE), 0, 0, m.width * c, m.height * c);
   else {
-    ctx.fillStyle = GROUND[base];
+    ctx.fillStyle = pattern(base) ?? GROUND[base];
     ctx.fillRect(0, 0, m.width * c, m.height * c);
   }
 
@@ -189,13 +235,19 @@ function drawGround(ctx: Ctx, rng: Rng, m: Battlemap, c: number) {
     // Cave rock is the textured backdrop already.
     if (layer === "rock" && m.setting === "cave") continue;
     const color = GROUND[layer];
+    const tex = pattern(layer);
     if (!ORGANIC.has(layer) && layer !== "rock") {
       // Built floors stay crisp: planks and flagstones square to the grid.
       for (let y = 0; y < m.height; y++) {
         for (let x = 0; x < m.width; x++) {
           if (m.ground[y]![x] !== layer) continue;
-          rect(ctx, x * c, y * c, c, c, color);
-          groundDetail(ctx, rng, layer, x * c, y * c, c);
+          if (tex) {
+            ctx.fillStyle = tex;
+            ctx.fillRect(x * c, y * c, c, c);
+          } else {
+            rect(ctx, x * c, y * c, c, c, color);
+            groundDetail(ctx, rng, layer, x * c, y * c, c);
+          }
         }
       }
       continue;
@@ -203,11 +255,12 @@ function drawGround(ctx: Ctx, rng: Rng, m: Battlemap, c: number) {
     // A cave's floor follows the same outline as its walls (pools are painted on top).
     const path = layer === "cave" && m.outlines ? loopsPath(m.outlines, c) : groundPath(m, layer, c);
     if (!path) continue;
-    ctx.fillStyle = color;
+    ctx.fillStyle = tex ?? color;
     ctx.fill(path, "evenodd");
     ctx.save();
     ctx.clip(path, "evenodd");
-    for (let y = 0; y < m.height; y++) {
+    // A photo texture already has its own detail; painted ground gets mottling and specks.
+    for (let y = 0; y < m.height && !tex; y++) {
       for (let x = 0; x < m.width; x++) {
         const here = m.ground[y]![x];
         if (here !== layer && !(layer === "cave" && here === "water")) continue;
@@ -484,6 +537,19 @@ function drawProp(ctx: Ctx, rng: Rng, p: Prop, c: number) {
       ctx.lineWidth = line;
       break;
     }
+    case "well": {
+      shadow(ctx, cx, cy, r * 0.9, r * 0.85, c);
+      circle(ctx, cx, cy, r * 0.85, "#7d786f");
+      circle(ctx, cx, cy, r * 0.6, "#3d6b86");
+      circle(ctx, cx - r * 0.15, cy - r * 0.15, r * 0.2, "rgba(200, 230, 255, 0.35)");
+      ctx.strokeStyle = "#4a3a28";
+      ctx.lineWidth = c * 0.08;
+      ctx.beginPath();
+      seg(ctx, cx - r * 0.9, cy, cx + r * 0.9, cy);
+      ctx.stroke();
+      ctx.lineWidth = line;
+      break;
+    }
     case "cart": {
       shadow(ctx, cx, cy, w / 2, h / 2, c);
       const along = p.w >= p.h;
@@ -599,12 +665,18 @@ export function drawBattlemap(canvas: HTMLCanvasElement, m: Battlemap, o: Battle
   const ctx = canvas.getContext("2d")!;
   const rng = createRng(`${m.seed}:paint`);
 
-  drawGround(ctx, rng, m, c);
+  drawGround(ctx, rng, m, c, o);
   // Under-props (rugs) first, then low props, then tall ones (trees overhang everything).
   const order = (p: Prop) => (p.kind === "rug" ? 0 : p.kind === "tree" ? 2 : 1);
-  for (const p of [...m.props].sort((a, b) => order(a) - order(b))) drawProp(ctx, rng, p, c);
+  const artRng = createRng(`${m.seed}:art`);
+  for (const p of [...m.props].sort((a, b) => order(a) - order(b))) {
+    const art = o.props?.[p.kind];
+    if (art?.length) drawPropArt(ctx, artRng, p, c, art);
+    else drawProp(ctx, rng, p, c);
+  }
   drawWalls(ctx, m, c);
   drawLamps(ctx, m, c);
+  if (o.roofs) drawRoofs(ctx, m, c, o.labels);
 
   if (o.preview) {
     ctx.strokeStyle = "rgba(0, 0, 0, 0.12)";
@@ -618,6 +690,75 @@ export function drawBattlemap(canvas: HTMLCanvasElement, m: Battlemap, o: Battle
       for (const [x, y] of cells) ctx.fillRect(x * c, y * c, c, c);
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Roofs
+
+const ROOFS = ["#4a5361", "#8c3b2a", "#a68a52", "#4d7a6a", "#5a3e2b", "#6e5a4a"];
+
+/** Gabled roofs over every town building, on a transparent canvas (or over the map for the preview). */
+export function drawRoofs(ctx: Ctx, m: Battlemap, c: number, labels = false) {
+  const rng = createRng(`${m.seed}:roofs`);
+  for (const b of m.buildings ?? []) {
+    const over = c * 0.15;
+    const x = b.x * c - over;
+    const y = b.y * c - over;
+    const w = b.w * c + over * 2;
+    const h = b.h * c + over * 2;
+    const color = rng.pick(ROOFS);
+    // Ridge along the long side; one slope lit, one in shade.
+    const along = b.w >= b.h;
+    ctx.fillStyle = "rgba(0, 0, 0, 0.3)";
+    ctx.fillRect(x + c * 0.12, y + c * 0.15, w, h);
+    if (along) {
+      rect(ctx, x, y, w, h / 2, shade(color, 0.12));
+      rect(ctx, x, y + h / 2, w, h / 2, shade(color, -0.15));
+    } else {
+      rect(ctx, x, y, w / 2, h, shade(color, 0.12));
+      rect(ctx, x + w / 2, y, w / 2, h, shade(color, -0.15));
+    }
+    // Courses of tile or thatch, running along the ridge.
+    ctx.strokeStyle = "rgba(0, 0, 0, 0.18)";
+    ctx.lineWidth = Math.max(1, c / 30);
+    ctx.beginPath();
+    const step = c * 0.33;
+    if (along) for (let ty = y + step; ty < y + h; ty += step) seg(ctx, x, ty, x + w, ty);
+    else for (let tx = x + step; tx < x + w; tx += step) seg(ctx, tx, y, tx, y + h);
+    ctx.stroke();
+    ctx.strokeStyle = shade(color, -0.5);
+    ctx.lineWidth = Math.max(2, c / 14);
+    ctx.strokeRect(x, y, w, h);
+    ctx.beginPath();
+    if (along) seg(ctx, x, y + h / 2, x + w, y + h / 2);
+    else seg(ctx, x + w / 2, y, x + w / 2, y + h);
+    ctx.stroke();
+    if (rng.chance(0.6)) {
+      const chx = x + w * (0.2 + rng.next() * 0.6);
+      const chy = y + h * (0.2 + rng.next() * 0.6);
+      rect(ctx, chx - c * 0.18, chy - c * 0.18, c * 0.36, c * 0.36, "#6f6a62", "#2e2a26", Math.max(1, c / 30));
+      rect(ctx, chx - c * 0.1, chy - c * 0.1, c * 0.2, c * 0.2, "#1d1a17");
+    }
+    if (labels) {
+      const lx = x + w / 2;
+      const ly = y + h / 2;
+      circle(ctx, lx, ly, c * 0.55, "rgba(20, 20, 20, 0.75)");
+      ctx.fillStyle = "#fff";
+      ctx.font = `bold ${Math.round(c * 0.6)}px sans-serif`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(String(b.id), lx, ly + c * 0.03);
+    }
+  }
+}
+
+export function roofsToBlob(m: Battlemap, cell: number): Promise<Blob> {
+  const canvas = document.createElement("canvas");
+  canvas.width = m.width * cell;
+  canvas.height = m.height * cell;
+  drawRoofs(canvas.getContext("2d")!, m, cell);
+  // PNG keeps the transparency around the roofs.
+  return new Promise((resolve, reject) => canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("Canvas export failed"))), "image/png"));
 }
 
 export function battlemapToBlob(m: Battlemap, o: BattlemapRenderOptions): Promise<Blob> {

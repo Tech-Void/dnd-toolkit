@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createRng, FLOOR, generateDungeon, generateHook, generateLoot, stockDungeon, tierForCr } from "../src/index.ts";
+import { createRng, FLOOR, generateDungeon, generateHook, generateLoot, rerollHookPart, stockDungeon, tierForCr } from "../src/index.ts";
 
 describe("rng", () => {
   it("is deterministic per seed", () => {
@@ -80,5 +80,24 @@ describe("hooks", () => {
     const h = generateHook({ seed: "h", tone: "horror", partyLevel: 5 });
     expect(h.tone).toBe("horror");
     expect(generateHook({ seed: "h", tone: "horror", partyLevel: 5 })).toEqual(h);
+  });
+
+  it("builds its text from its parts and rerolls one part at a time", () => {
+    const h = generateHook({ seed: "parts", tone: "exploration", partyLevel: 8 });
+    for (const part of [h.patron, h.goal, h.location, h.complication, h.deadline, h.bonusReward]) expect(h.text.toLowerCase()).toContain(part.toLowerCase());
+    const r = rerollHookPart(h, "location", "again");
+    expect(r.location).not.toBe(h.location);
+    expect(r.text).toContain(r.location);
+    expect({ ...r, location: h.location, text: h.text }).toEqual(h);
+    const richer = rerollHookPart(h, "reward", "more");
+    expect(richer.rewardGp).not.toBe(h.rewardGp);
+    expect(richer.text).toContain(`${richer.rewardGp} gp`);
+  });
+
+  it("varies a lot", () => {
+    const hooks = Array.from({ length: 40 }, (_, i) => generateHook({ seed: `v${i}` }));
+    // 60 goals across the tones: 40 rolls land on well over 20 different ones.
+    expect(new Set(hooks.map((h) => h.goal)).size).toBeGreaterThan(20);
+    expect(new Set(hooks.map((h) => h.tone)).size).toBe(5);
   });
 });

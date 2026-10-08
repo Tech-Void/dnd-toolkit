@@ -4,6 +4,7 @@ import { createBattlemapScene } from "./importers/battlemap.ts";
 import { createNpcActor, npcHtml, placeNpcToken } from "./importers/npc.ts";
 import { createForgedItem, forgedItemData, giveForgedItems } from "./importers/forge.ts";
 import { addParsedToActor, createParsedItems, parsedItemData } from "./importers/parsed.ts";
+import { createStatblockActor } from "./importers/statblock.ts";
 import { getCatalog, getMagicItems, reanalyzeMonsters, resetCatalog } from "./catalog.ts";
 import { createDungeonScene } from "./importers/scene.ts";
 import { createJournal, createRoomKeyJournal, encounterHtml, hookHtml, lootHtml, postToChat } from "./importers/journal.ts";
@@ -11,6 +12,9 @@ import { ensureWorldActor, linkEncounter, placeEncounter } from "./importers/tok
 import { createMerchant, createShopJournal, getShopItems, resetShopItems, shopHtml } from "./importers/shop.ts";
 import { giveLootToActor, resetItemIndex, resolveItemData } from "./importers/items.ts";
 import { MODULE_ID } from "./util.ts";
+import { initRollRequests, sendRollRequest } from "./rolls.ts";
+import { initCombatHelpers, registerCombatSettings } from "./combat.ts";
+import { initInteractive, noticeTrap, setTrapArmed, springTrap } from "./interactive.ts";
 
 /**
  * Public API for macros and other modules:
@@ -57,6 +61,10 @@ const api = {
   createParsedItems,
   addParsedToActor,
   parsedItemData,
+  /** const { actor } = await tk.createStatblockActor(tk.parseStatblock(pastedStatblock)) */
+  createStatblockActor,
+  /** await tk.sendRollRequest({ id: "x", prompt: "", type: "skill", key: "prc", dc: 13, showDc: false, advantage: "normal", rollMode: "publicroll", actorIds: [...] }) */
+  sendRollRequest,
   placeNpcToken,
   npcHtml,
   createRoomKeyJournal,
@@ -67,6 +75,11 @@ const api = {
   giveLootToActor,
   resolveItemData,
   resetItemIndex,
+  /** Called by trap Regions' scripts: a token stepped on a trap / walked up to one. */
+  springTrap,
+  noticeTrap,
+  /** await tk.setTrapArmed(region, true) re-arms a sprung trap. */
+  setTrapArmed,
 };
 
 Hooks.once("init", () => {
@@ -81,6 +94,9 @@ Hooks.once("init", () => {
   });
   // Combat roles derived from compendium statblocks, so each monster is only analyzed once.
   game.settings.register(MODULE_ID, "roleCache", { scope: "world", config: false, type: Object, default: {} });
+  registerCombatSettings();
+  // Monsters used lately, so generators don't keep reaching for the same ones.
+  game.settings.register(MODULE_ID, "recentMonsters", { scope: "client", config: false, type: Array, default: [] });
   game.modules.get(MODULE_ID).api = api;
 });
 
@@ -93,6 +109,9 @@ for (const hook of ["createActor", "deleteActor", "createItem", "deleteItem", "u
 }
 
 Hooks.once("ready", () => {
+  initRollRequests();
+  initCombatHelpers();
+  initInteractive();
   Hooks.callAll(`${MODULE_ID}.ready`, api);
 });
 

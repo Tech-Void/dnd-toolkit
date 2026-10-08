@@ -16,7 +16,43 @@ const FALLBACK_ICON: Record<LootItem["kind"], string> = {
   gem: "icons/commodities/gems/gem-faceted-round-white.webp",
   art: "icons/commodities/treasure/figurine-idol.webp",
   magic: "icons/magic/symbols/runes-star-orange.webp",
+  consumable: "icons/consumables/potions/bottle-round-corked-red.webp",
+  trade: "icons/commodities/cloth/cloth-bolt-gold-red.webp",
+  trinket: "icons/commodities/treasure/trinket-totem-bone-green.webp",
+  gear: "icons/tools/hand/lockpicks-steel-grey.webp",
+  part: "icons/commodities/biological/hand-clawed-blue.webp",
+  key: "icons/sundries/misc/key-steel.webp",
+  book: "icons/sundries/books/book-red-exclamation.webp",
 };
+
+/** dnd5e item type and subtype for things that aren't in any compendium. */
+const FALLBACK_TYPE: Record<LootItem["kind"], [type: string, subtype: string]> = {
+  gem: ["loot", "gem"], art: ["loot", "art"], magic: ["loot", "treasure"], consumable: ["consumable", "potion"], trade: ["loot", "treasure"],
+  trinket: ["loot", "treasure"], gear: ["loot", "gear"], part: ["loot", "material"], key: ["loot", "gear"], book: ["loot", "treasure"],
+};
+
+/** What the toolkit remembers on an item: crafting material, source CR, book contents. */
+const toolkitFlags = (item: LootItem) => ({
+  generated: true,
+  ...(item.material ? { material: item.material } : {}),
+  ...(item.sourceCr !== undefined ? { sourceCr: item.sourceCr } : {}),
+  ...(item.book ? { book: item.book } : {}),
+});
+
+/** A spell scroll built from the real spell (dnd5e makes the scroll), or null when the spell isn't found. */
+async function scrollData(item: LootItem): Promise<any> {
+  if (!item.spell || !isDnd5e()) return null;
+  const spell = await compendiumItem(item.spell.name);
+  const make = CONFIG.Item.documentClass?.createScrollFromSpell;
+  if (spell?.type !== "spell" || !make) return null;
+  const scroll = await make.call(CONFIG.Item.documentClass, spell);
+  const data = scroll?.toObject?.() ?? scroll;
+  if (!data) return null;
+  delete data._id;
+  data.system = { ...data.system, quantity: item.quantity };
+  data.flags = { ...data.flags, [MODULE_ID]: toolkitFlags(item) };
+  return data;
+}
 
 let index: Map<string, { pack: any; id: string }> | null = null;
 
@@ -43,28 +79,36 @@ export async function compendiumItem(name: string): Promise<any> {
 export async function resolveItemData(item: LootItem): Promise<object> {
   // One-of-a-kind items from the Forge build themselves.
   if (item.forged) return forgedItemData(item.forged);
-  const hit = item.uuid ? null : (await compendiumIndex()).get(normalize(item.name));
+  const scroll = await scrollData(item);
+  if (scroll) return scroll;
+  // Keys, trinkets and harvested parts are one-offs; don't let a same-named compendium item stand in.
+  const lookup = !["key", "trinket", "part", "trade", "book"].includes(item.kind);
+  const hit = item.uuid || !lookup ? null : (await compendiumIndex()).get(normalize(item.name));
   const doc = item.uuid ? await fromUuid(item.uuid) : hit ? await hit.pack.getDocument(hit.id) : null;
   if (doc) {
     const data = doc.toObject();
     delete data._id;
     if (data.system && "quantity" in data.system) data.system.quantity = item.quantity;
-    data.flags = { ...data.flags, [MODULE_ID]: { generated: true } };
+    data.flags = { ...data.flags, [MODULE_ID]: toolkitFlags(item) };
     return data;
   }
+  const [type, subtype] = FALLBACK_TYPE[item.kind];
+  const what = item.kind === "magic" ? `${item.rarity} magic item` : item.kind === "key" ? "A key." : `${item.kind}, worth ${item.valueGp} gp${item.quantity > 1 ? " each" : ""}`;
   return {
     name: item.name,
-    type: isDnd5e() ? "loot" : Object.keys(game.system.documentTypes?.Item ?? { loot: 1 })[0],
+    type: isDnd5e() ? type : Object.keys(game.system.documentTypes?.Item ?? { loot: 1 })[0],
     img: FALLBACK_ICON[item.kind],
     system: isDnd5e()
       ? {
           quantity: item.quantity,
           price: { value: item.valueGp, denomination: "gp" },
           rarity: item.rarity ? DND5E_RARITY[item.rarity] : "",
-          description: { value: `<p>${esc(item.kind === "magic" ? `${item.rarity} magic item` : `${item.kind}, worth ${item.valueGp} gp`)}</p>` },
+          type: { value: subtype },
+          description: { value: `<p>${esc(item.note ?? what)}</p>` },
+          ...(type === "consumable" ? { uses: { value: 1, max: "1", per: "charges", autoDestroy: true } } : {}),
         }
       : {},
-    flags: { [MODULE_ID]: { generated: true } },
+    flags: { [MODULE_ID]: toolkitFlags(item) },
   };
 }
 

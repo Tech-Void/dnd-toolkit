@@ -1,5 +1,6 @@
-import type { Battlemap, Encounter, Prop } from "@dnd-toolkit/core";
-import { battlemapToBlob } from "../render-battlemap.ts";
+import { lockPin, type Battlemap, type Encounter, type Prop } from "@dnd-toolkit/core";
+import { lockedDoorData, trapRegionData } from "../interactive.ts";
+import { battlemapToBlob, roofsToBlob } from "../render-battlemap.ts";
 import { ambientLight, ensureFolder, esc, MODULE_ID } from "../util.ts";
 import { createJournal } from "./journal.ts";
 import { uploadImage } from "./scene.ts";
@@ -11,6 +12,10 @@ export interface BattlemapSceneOptions {
   gridSize?: number;
   /** Drop this encounter's tokens (hidden) in the enemy start zone. */
   encounter?: Encounter | null;
+  /** Map pins, e.g. a settlement's buildings linked to its journal pages (grid units). */
+  notes?: { x: number; y: number; text: string; entryId: string; pageId?: string; icon?: string }[];
+  /** Use this journal instead of making a battlefield-notes one. */
+  journalId?: string;
   activate?: boolean;
 }
 
@@ -53,6 +58,7 @@ export async function createBattlemapScene(m: Battlemap, opts: BattlemapSceneOpt
     sight: w.window ? NONE : NORMAL,
     light: w.window ? NONE : NORMAL,
     sound: NORMAL,
+    ...(w.lock ? lockedDoorData(w.lock) : {}),
   }));
   for (const p of m.props) {
     if (p.blocks === "none") continue;
@@ -63,9 +69,51 @@ export async function createBattlemapScene(m: Battlemap, opts: BattlemapSceneOpt
 
   const lights = m.lights.map((l) => ambientLight(l, gs));
 
-  const journal = m.notes.length
+  const journal = opts.journalId ? { id: opts.journalId } : m.notes.length
     ? await createJournal(`${name} — Battlefield`, battlemapNotesHtml(m), { kind: "battlemap", seed: m.seed })
     : null;
+
+  // Town roofs: one transparent overhead tile. VISION occlusion reveals what a token can actually
+  // see beneath it, so stepping through a door shows that building's inside and nothing else.
+  const tiles: object[] = [];
+  if (m.buildings?.length) {
+    const roofSrc = await uploadImage(await roofsToBlob(m, gs), `roofs-${m.seed.replace(/[^\w-]/g, "_")}-${Date.now()}.png`);
+    tiles.push({
+      texture: { src: roofSrc },
+      x: 0,
+      y: 0,
+      width: m.width * gs,
+      height: m.height * gs,
+      elevation: 20,
+      occlusion: { mode: CONST.OCCLUSION_MODES.VISION, alpha: 0 },
+      restrictions: { light: false, weather: true },
+    });
+  }
+  const notes: object[] = (opts.notes ?? []).map((n) => ({
+    entryId: n.entryId,
+    pageId: n.pageId,
+    x: Math.round(n.x * gs),
+    y: Math.round(n.y * gs),
+    text: n.text,
+    texture: { src: n.icon ?? "icons/svg/house.svg" },
+    iconSize: Math.round(gs * 0.6),
+    fontSize: Math.round(gs * 0.3),
+  }));
+  // GM pins for locked doors and traps, linked to the battlefield notes.
+  if (journal) {
+    for (const w of m.walls.filter((w) => w.lock)) {
+      notes.push({
+        entryId: journal.id, pageId: undefined, x: Math.round(((w.x1 + w.x2) / 2) * gs), y: Math.round(((w.y1 + w.y2) / 2) * gs), text: lockPin(w.lock!),
+        texture: { src: "icons/svg/padlock.svg", tint: "#f0c040" }, iconSize: Math.round(gs * 0.35), fontSize: Math.round(gs * 0.2),
+      });
+    }
+    for (const t of m.traps ?? []) {
+      notes.push({
+        entryId: journal.id, pageId: undefined, x: Math.round((t.cells[0]![0] + 0.5) * gs), y: Math.round((t.cells[0]![1] + 0.5) * gs), text: `Trap: ${t.trap.name}`,
+        texture: { src: "icons/svg/trap.svg", tint: "#ff5544" }, iconSize: Math.round(gs * 0.4), fontSize: Math.round(gs * 0.22),
+      });
+    }
+  }
 
   const scene = await Scene.create({
     name,
@@ -82,8 +130,14 @@ export async function createBattlemapScene(m: Battlemap, opts: BattlemapSceneOpt
     journal: journal?.id ?? null,
     walls,
     lights,
+    tiles,
+    notes,
+    foregroundElevation: 20,
     flags: { [MODULE_ID]: { seed: m.seed, kind: "battlemap", setting: m.setting } },
   });
+
+  const regions = (m.traps ?? []).flatMap((t, i) => trapRegionData(t.trap, t.cells, gs, `trap-${i}`));
+  if (regions.length) await scene.createEmbeddedDocuments("Region", regions);
 
   if (opts.encounter) {
     await linkEncounter(opts.encounter);
