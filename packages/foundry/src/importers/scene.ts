@@ -1,5 +1,5 @@
-import { lockPin, makePile, roomCenter, type DungeonLight, type DungeonMap, type LootPile, type RoomKey, type WallSegment } from "@dnd-toolkit/core";
-import { lockedDoorData, trapRegionData } from "../interactive.ts";
+import { lockPin, makePile, roomCenter, secretDoorDc, type DungeonLight, type DungeonMap, type LootPile, type RoomKey, type WallSegment } from "@dnd-toolkit/core";
+import { lockedDoorData, secretDoorRegionData, trapRegionData } from "../interactive.ts";
 import { createPile } from "../loot-piles.ts";
 import { dungeonToBlob, tokenCells } from "../render.ts";
 import { dungeonArt } from "../fa-assets.ts";
@@ -72,7 +72,9 @@ export async function createDungeonScene(map: DungeonMap, opts: SceneImportOptio
   })).map((data, i) => {
     // The door a puzzle opens remembers which puzzle.
     const pid = puzzleDoorFlag(map, map.walls[i]!);
-    return pid ? { ...data, flags: { [MODULE_ID]: { ...((data as any).flags?.[MODULE_ID] ?? {}), puzzleDoor: pid } } } : data;
+    const withPuzzle = pid ? { ...data, flags: { [MODULE_ID]: { ...((data as any).flags?.[MODULE_ID] ?? {}), puzzleDoor: pid } } } : data;
+    // Secret doors remember which notice zone finds them.
+    return map.walls[i]!.secret ? { ...withPuzzle, flags: { [MODULE_ID]: { ...((withPuzzle as any).flags?.[MODULE_ID] ?? {}), secretKey: `secret-${i}` } } } : withPuzzle;
   });
 
   let journal: any = null;
@@ -158,6 +160,7 @@ export async function createDungeonScene(map: DungeonMap, opts: SceneImportOptio
   // Puzzles: a tile and a region for every lever, plate, statue and rune.
   const pz = await puzzleSceneData(map, gs);
   regions.push(...pz.regions);
+  map.walls.forEach((w, i) => w.secret && regions.push(secretDoorRegionData(w, secretDoorDc(map, opts.roomKey ?? [], w), gs, `secret-${i}`)));
   if (pz.tiles.length) await scene.createEmbeddedDocuments("Tile", pz.tiles);
   if (Object.keys(pz.flags).length) await scene.setFlag(MODULE_ID, "puzzles", pz.flags);
   if (regions.length) await scene.createEmbeddedDocuments("Region", regions);

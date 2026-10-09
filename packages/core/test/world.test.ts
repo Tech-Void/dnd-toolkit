@@ -55,3 +55,34 @@ describe("routes and trips", () => {
     expect(addWorldPlaces(n, [{ id: "new", name: "Greyholm", kind: "settlement" }])).toBe(n);
   });
 });
+
+describe("hex-crawl", async () => {
+  const { addDiscovery, exploreHex, isExplored, newlyFound, sightRadius } = await import("../src/index.ts");
+  it("starts fogged around the party and reveals along the way", () => {
+    const m = generateWorld({ seed: "fog", fog: true });
+    expect(m.explored!.length).toBeGreaterThan(0);
+    expect(m.explored!.length).toBeLessThan(m.w * m.h / 4);
+    expect(isExplored(m, m.party.x, m.party.y)).toBe(true);
+    const far = m.places.filter((p) => !m.found!.includes(p.id)).sort((a, b) => Math.hypot(b.x - m.party.x, b.y - m.party.y) - Math.hypot(a.x - m.party.x, a.y - m.party.y))[0]!;
+    expect(isExplored(m, far.x, far.y)).toBe(false);
+    const r = worldRoute(m, m.party, far)!;
+    const arrived = advanceTrip(startTrip(m, m.party.at!, far.id, r), Infinity);
+    expect(arrived.found).toContain(far.id);
+    expect(newlyFound(m, arrived).map((p) => p.id)).toContain(far.id);
+    expect(arrived.explored!.length).toBeGreaterThan(m.explored!.length);
+    expect(sightRadius(m, m.party.x, m.party.y)).toBeGreaterThan(0);
+  });
+  it("exploring turns things up, sometimes a new place", () => {
+    const m = generateWorld({ seed: "explore", fog: true });
+    const away = { ...m, party: { x: Math.floor(m.w / 2), y: Math.floor(m.h / 2) } };
+    const results = Array.from({ length: 60 }, (_, i) => exploreHex(away, `e${i}`));
+    expect(new Set(results.map((r) => r.kind)).size).toBeGreaterThanOrEqual(3);
+    const withPlace = results.find((r) => r.place);
+    if (withPlace) expect(addDiscovery(m, withPlace.place!).found).toContain(withPlace.place!.id);
+  });
+  it("leaves unfogged maps alone", () => {
+    const m = generateWorld({ seed: "clear" });
+    expect(m.explored).toBeUndefined();
+    expect(isExplored(m, 0, 0)).toBe(true);
+  });
+});

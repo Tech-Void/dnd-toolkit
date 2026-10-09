@@ -53,6 +53,10 @@ export interface WorldMap {
   places: WorldPlace[];
   party: { x: number; y: number; at?: string };
   trip?: WorldTrip;
+  /** Hex-crawl: cells the party has seen (absent = no fog). */
+  explored?: number[];
+  /** Places the party has found (ids). */
+  found?: string[];
 }
 
 export interface WorldOptions {
@@ -65,6 +69,8 @@ export interface WorldOptions {
   /** How many more settlements and sites to add. */
   towns?: number;
   sites?: number;
+  /** Hex-crawl: start with only the party's surroundings known. */
+  fog?: boolean;
   seed?: string | number;
 }
 
@@ -368,7 +374,105 @@ export function generateWorld(o: WorldOptions = {}): WorldMap {
   }
   const start = m.places.find((p) => p.kind === "city") ?? m.places[0];
   if (start) m.party = { x: start.x, y: start.y, at: start.id };
+  if (o.fog) {
+    m.explored = [];
+    m.found = start ? [start.id] : [];
+    return revealAround(m, m.party.x, m.party.y);
+  }
   return m;
+}
+
+// --- Hex-crawl ------------------------------------------------------------------------------------
+
+/** How far the party sees from a cell, in cells: further from high ground. */
+export function sightRadius(m: WorldMap, x: number, y: number): number {
+  const c = worldCell(m, Math.round(x), Math.round(y));
+  return c === "mountains" ? 4 : c === "hills" ? 3 : c === "forest" || c === "swamp" ? 1.5 : 2;
+}
+
+/** See everything within sight of (x, y); places in sight are found. No-op without fog. */
+export function revealAround(m: WorldMap, x: number, y: number): WorldMap {
+  if (!m.explored) return m;
+  const r = sightRadius(m, x, y);
+  const seen = new Set(m.explored);
+  for (let dy = -Math.ceil(r); dy <= Math.ceil(r); dy++) {
+    for (let dx = -Math.ceil(r); dx <= Math.ceil(r); dx++) {
+      const cx = Math.round(x) + dx;
+      const cy = Math.round(y) + dy;
+      if (cx < 0 || cy < 0 || cx >= m.w || cy >= m.h || Math.hypot(dx, dy) > r + 0.5) continue;
+      seen.add(idx(m, cx, cy));
+    }
+  }
+  const found = new Set(m.found ?? []);
+  for (const p of m.places) if (seen.has(idx(m, p.x, p.y))) found.add(p.id);
+  return { ...m, explored: [...seen], found: [...found] };
+}
+
+/** Places found between two states of the map. */
+export const newlyFound = (before: WorldMap, after: WorldMap) => after.places.filter((p) => (after.found ?? []).includes(p.id) && !(before.found ?? []).includes(p.id));
+
+export const isExplored = (m: WorldMap, x: number, y: number) => !m.explored || m.explored.includes(idx(m, Math.round(x), Math.round(y)));
+
+export interface ExploreResult {
+  kind: "discovery" | "encounter" | "forage" | "nothing";
+  text: string;
+  /** A new place on the map. */
+  place?: WorldPlace;
+  /** Monster tags for an encounter. */
+  tags?: string;
+}
+
+const DISCOVERIES: Partial<Record<WorldCell, [text: string, kind: WorldPlaceKind | null][]>> = {
+  forest: [["a ring of standing stones, moss-grown and humming faintly", "landmark"], ["a woodcutter's hut, abandoned in a hurry", null], ["a huge hollow oak with something living in it", "lair"], ["an overgrown shrine to a forgotten forest god", "temple"], ["a ruined hunting lodge", "dungeon"]],
+  hills: [["a barrow mound with a sealed stone door", "dungeon"], ["an old watchtower, half collapsed", "landmark"], ["a cave mouth that breathes warm air", "lair"], ["a shepherd's cairn with a message scratched into it", null], ["a dwarven mine entrance, long abandoned", "dungeon"]],
+  mountains: [["a narrow pass with a carved stone guardian", "landmark"], ["a dragon-scorched slope and a cave above it", "lair"], ["a monastery clinging to the cliff", "temple"], ["the entrance of a dwarven hold", "dungeon"]],
+  swamp: [["a drowned village, rooftops above the water", "dungeon"], ["a witch's stilt-house", "landmark"], ["a sunken temple, only its spire showing", "temple"], ["a nest of something large in the reeds", "lair"]],
+  desert: [["a buried city's tower tops in the dunes", "dungeon"], ["an oasis with an ancient statue", "landmark"], ["a sandstone tomb, its door ajar", "dungeon"], ["bleached bones of something enormous", null]],
+  grassland: [["a lonely standing stone carved with names", "landmark"], ["a burned-out farmstead", null], ["a battlefield, old weapons in the grass", "landmark"], ["a halfling burrow-village", null], ["a ruined keep on a low rise", "dungeon"]],
+  coast: [["a wrecked ship on the rocks", "dungeon"], ["a smugglers' cove", "lair"], ["a lighthouse, dark for years", "landmark"], ["a sea-cave shrine", "temple"]],
+  arctic: [["a frozen ship in the ice", "dungeon"], ["an ice cave glowing blue", "lair"], ["a giant's cairn", "landmark"]],
+};
+
+const FORAGE: Partial<Record<WorldCell, string>> = {
+  forest: "berries, mushrooms and a deer trail: a day's food for everyone",
+  grassland: "wild grain and rabbits: a day's food for everyone",
+  hills: "a clear spring and goat tracks: water and a day's food",
+  swamp: "healing moss: enough for a potion of healing with an herbalism kit",
+  coast: "shellfish and driftwood: a day's food and a good fire",
+  mountains: "a rare alpine flower worth 25 gp to an alchemist",
+  desert: "a hidden spring under a rock: water for everyone",
+  arctic: "a cache left by trappers: two days of rations",
+};
+
+/** A day spent exploring where the party is: something found, something met, food, or nothing. */
+export function exploreHex(m: WorldMap, seed: string | number): ExploreResult {
+  const rng = createRng(seed);
+  const x = Math.round(m.party.x);
+  const y = Math.round(m.party.y);
+  const cell = worldCell(m, x, y) ?? "grassland";
+  const terrain: Terrain = cell === "water" ? "coast" : (cell as Terrain);
+  const danger = TERRAINS[terrain]?.danger ?? 0.3;
+  const roll = rng.next();
+  const nearby = m.places.some((p) => Math.hypot(p.x - x, p.y - y) < 3);
+  if (roll < 0.35 && !nearby && DISCOVERIES[cell]?.length) {
+    const [text, kind] = rng.pick(DISCOVERIES[cell]!);
+    let place: WorldPlace | undefined;
+    if (kind && kind !== "city" && kind !== "town" && kind !== "village") {
+      // Just off the party's position, on land.
+      const spots = DIRS.map(([dx, dy]) => [x + dx, y + dy] as [number, number]).filter(([px, py]) => worldCell(m, px, py) && worldCell(m, px, py) !== "water");
+      const [px, py] = spots.length ? rng.pick(spots) : [x, y];
+      place = { id: `x${rng.int(0, 36 ** 6).toString(36)}`, name: `${rng.pick(SITE_A)} ${rng.pick(SITE_B[kind])}`, kind, x: px, y: py };
+    }
+    return { kind: "discovery", text: `They find ${text}.`, place };
+  }
+  if (roll < 0.35 + danger * 0.6) return { kind: "encounter", text: `Something finds them first: a ${TERRAINS[terrain].label.toLowerCase()} encounter.`, tags: TERRAINS[terrain].tags };
+  if (roll < 0.85) return { kind: "forage", text: `A good day's searching turns up ${FORAGE[cell] ?? "a little food"}.` };
+  return { kind: "nothing", text: "A long day of walking turns up nothing of note." };
+}
+
+/** Add a discovered place (found already) to the map. */
+export function addDiscovery(m: WorldMap, p: WorldPlace): WorldMap {
+  return { ...m, places: [...m.places, p], found: [...(m.found ?? []), p.id] };
 }
 
 /** Add campaign places the map doesn't have yet (keeps everything else). */
@@ -460,11 +564,22 @@ export function advanceTrip(m: WorldMap, miles: number): WorldMap {
     left -= seg;
     pos = { x: bx, y: by };
   }
+  // Hex-crawl: everything in sight along the way is seen.
+  let seen = m;
+  if (m.explored) {
+    let walked = 0;
+    for (let i = 0; i < t.path.length; i++) {
+      if (i) walked += Math.hypot(t.path[i]![0] - t.path[i - 1]![0], t.path[i]![1] - t.path[i - 1]![1]) * m.milesPerCell;
+      if (walked > done + 0.01) break;
+      if (walked >= t.done - m.milesPerCell) seen = revealAround(seen, t.path[i]![0], t.path[i]![1]);
+    }
+    seen = revealAround(seen, pos.x, pos.y);
+  }
   if (done >= t.miles) {
     const dest = m.places.find((p) => p.id === t.to);
-    return { ...m, trip: undefined, party: dest ? { x: dest.x, y: dest.y, at: dest.id } : { ...pos } };
+    return { ...seen, trip: undefined, party: dest ? { x: dest.x, y: dest.y, at: dest.id } : { ...pos } };
   }
-  return { ...m, trip: { ...t, done, day: t.day + 1 }, party: pos };
+  return { ...seen, trip: { ...t, done, day: t.day + 1 }, party: pos };
 }
 
 export const worldPlace = (m: WorldMap, id: string) => m.places.find((p) => p.id === id);

@@ -18,6 +18,7 @@ import { currentDay } from "./downtime.ts";
 import { encounterHtml, lootHtml } from "./importers/journal.ts";
 import { placeEncounter } from "./importers/tokens.ts";
 import { ensureFolder, esc, MODULE_ID } from "./util.ts";
+import { endSession, sessionEventCount, sessionNumber } from "./rewards.ts";
 
 // ---------------------------------------------------------------------------
 // Campaign → Next session: a prep page built from the campaign (quests and what's next, faction
@@ -97,13 +98,14 @@ export function prepHtml(): string {
     <label>${sel("season", ["spring", "summer", "autumn", "winter"], o?.season ?? "summer")}</label>
     ${btn("prep", `<i class="fa-solid fa-wand-magic-sparkles"></i> ${s ? "Prep again" : "Prep next session"}`)}
   </div>`;
-  if (!s) return `${form}<p class="dt-empty">Nothing prepped yet. Set where they're heading (or leave it blank) and press <em>Prep next session</em>.</p>`;
+  const end = btn("prepEnd", `<i class="fa-solid fa-flag-checkered"></i> End session ${sessionNumber()} &amp; recap`, {}, `Write a recap of this session (${sessionEventCount()} things logged: XP, loot, fights, quests) for the players, and start a new one`);
+  if (!s) return `${form}<p class="dt-sub">${end}</p><p class="dt-empty">Nothing prepped yet. Set where they're heading (or leave it blank) and press <em>Prep next session</em>.</p>`;
   const p = s.prep;
   const section = (title: string, icon: string, body: string, part?: PrepPart | "loot") =>
     `<div class="dt-card dt-prep"><p class="dt-enc-head"><i class="fa-solid ${icon}"></i> <strong>${title}</strong>${part ? ` ${reroll(part)}` : ""}</p>${body}</div>`;
   const list = (items: string[], empty: string) => (items.length ? `<ul>${items.join("")}</ul>` : `<p class="dt-empty">${empty}</p>`);
   return `${form}
-    <p class="dt-sub">Prepped for day ${p.day}. ${btn("prepJournal", `<i class="fa-solid fa-book"></i> Write to journal`, {}, "Write (or update) the GM-only “Next session” journal")}</p>
+    <p class="dt-sub">Prepped for day ${p.day}. ${end} ${btn("prepJournal", `<i class="fa-solid fa-book"></i> Write to journal`, {}, "Write (or update) the GM-only “Next session” journal")}</p>
     ${p.recap.length ? section("Since last time", "fa-clock-rotate-left", list(p.recap.map((r) => `<li>${esc(r)}</li>`), "")) : ""}
     ${section("Quests", "fa-scroll", list(p.quests.map((q) => `<li><strong>${esc(q.title)}</strong> (${q.progress[0]}/${q.progress[1]})${q.giver ? ` for ${esc(q.giver)}` : ""}: next, ${esc(q.next)}</li>`), "No active quests: lean on a hook or a faction move."))}
     ${section("Faction moves", "fa-flag", list(p.factions.map((f) => `<li><strong>${esc(f.name)}</strong> <small>(${esc(f.standing)})</small>: ${esc(f.move)}</li>`), "No factions yet."), "factions")}
@@ -170,6 +172,9 @@ export async function prepAction(op: string, d: DOMStringMap, root: HTMLElement)
       ui.notifications.info("Placed (hidden). Reveal them when the fight starts.");
       return true;
     }
+    case "prepEnd":
+      await endSession();
+      return true;
     case "prepJournal": {
       if (!s) return true;
       await writeJournal(s);

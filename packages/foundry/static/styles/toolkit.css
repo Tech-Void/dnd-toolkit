@@ -516,3 +516,58 @@
 .dt-loot-actions button { flex: 1 1 45%; }
 .dt-loot-foot { margin-top: 6px; font-size: 11px; }
 .dt-ab-search { flex: none; width: auto; margin-left: auto; line-height: 1.6; }
+
+/* Shop window */
+.dt-shop-window .window-content { padding: 8px 10px; display: flex; flex-direction: column; }
+.dt-shop-head p { margin: 0 0 4px; }
+.dt-shop-head .dt-row { align-items: center; gap: 6px; flex-wrap: wrap; }
+.dt-shop-head label { display: flex; align-items: center; gap: 4px; }
+.dt-shop-head button { width: auto; flex: none; line-height: 1.6; }
+.dt-shop-purse { font-size: 12px; color: #6a5a2a; }
+.dt-shop-head nav { display: flex; gap: 4px; margin: 6px 0 4px; }
+.dt-shop-head nav input { flex: 1; height: 24px; }
+.dt-shop-window table.dt-stock td button { width: auto; line-height: 1.4; padding: 0 8px; }
+.dt-shop-icon { width: 20px; height: 20px; border: none; vertical-align: middle; }
+
+/* Town buildings */
+.dt-town-window .window-content { padding: 8px 10px; }
+.dt-town-window .dt-row { align-items: center; gap: 8px; flex-wrap: wrap; margin: 4px 0; }
+.dt-town-window label { display: flex; align-items: center; gap: 4px; }
+.dt-town-window table.dt-stock td button { width: auto; padding: 0 8px; line-height: 1.5; }
+
+/* Conversations */
+.dt-talk-window .window-content { padding: 8px 10px; }
+.dt-talk-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
+.dt-talk-meter { display: inline-flex; gap: 2px; margin-right: 6px; }
+.dt-talk-meter i { width: 14px; height: 10px; border-radius: 2px; background: rgba(0,0,0,.15); }
+.dt-talk-meter i.on.m-3, .dt-talk-meter i.on.m-2 { background: #b8352c; }
+.dt-talk-meter i.on.m-1 { background: #d08a2a; }
+.dt-talk-meter i.on.m0 { background: #8a8a8a; }
+.dt-talk-meter i.on.m1, .dt-talk-meter i.on.m2 { background: #4a9a4a; }
+.dt-talk-meter i.on.m3 { background: #2a7ad0; }
+.dt-talk-patience { color: #a07a2a; }
+.dt-talk-told { margin: 2px 0; padding-left: 18px; }
+.dt-talk-log { font-size: 12px; padding-left: 16px; }
+.dt-talk-ended { text-align: center; }
+.dt-talk-setup label { display: flex; flex-direction: column; gap: 2px; margin-bottom: 6px; }
+.dt-talk-gm button { flex: 1 1 22%; }
+
+/* Skill challenges and chases */
+.dt-challenge-window .window-content { padding: 8px 10px; }
+.dt-chal-score { display: flex; justify-content: space-between; gap: 8px; margin: 4px 0; font-size: 12px; }
+.dt-chal-score i { display: inline-block; width: 12px; height: 12px; margin-left: 2px; border-radius: 50%; border: 1px solid #888; vertical-align: middle; }
+.dt-chal-score i.ok.on { background: #4a9a4a; border-color: #4a9a4a; }
+.dt-chal-score i.bad.on { background: #b8352c; border-color: #b8352c; }
+.dt-challenge-window .dt-loot-actions button { flex: 1 1 100%; text-align: left; }
+.dt-challenge-window .dt-row { align-items: center; gap: 6px; margin-top: 4px; }
+.dt-challenge-window .dt-row button { width: auto; flex: none; }
+.dt-chase-track { display: flex; align-items: center; gap: 6px; font-size: 11px; margin: 4px 0; }
+.dt-chase-steps { display: flex; gap: 3px; flex: 1; justify-content: center; }
+.dt-chase-steps i { width: 22px; height: 22px; border-radius: 4px; background: rgba(0,0,0,.1); display: grid; place-items: center; font-style: normal; }
+.dt-chase-steps i.on { background: #c0392b; color: #fff; }
+.dt-chase-comp { font-weight: 600; }
+.dt-chal-start summary { cursor: pointer; }
+
+/* Ambience dialog */
+.dt-ambience label { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 4px 0; }
+.dt-ambience select { flex: 0 0 60%; }

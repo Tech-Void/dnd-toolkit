@@ -1,6 +1,10 @@
 import {
+  addDiscovery,
   addWorldPlaces,
   advanceTrip,
+  exploreHex,
+  newlyFound,
+  sightRadius,
   generateWorld,
   randomSeed,
   startTrip,
@@ -15,6 +19,7 @@ import {
   type WorldPlaceKind,
 } from "@dnd-toolkit/core";
 import { getCampaign } from "./campaign-store.ts";
+import { ensureStash } from "./loot-piles.ts";
 import { uploadImage } from "./importers/scene.ts";
 import { WORLD_CELL_PX, worldToBlob } from "./render-world.ts";
 import { ensureFolder, esc, MODULE_ID } from "./util.ts";
@@ -62,8 +67,12 @@ async function ensureAtlas(w: StoredWorld) {
   return atlas;
 }
 
+const isFound = (w: StoredWorld, p: WorldPlace) => !w.explored || (w.found ?? []).includes(p.id);
+
 const noteData = (w: StoredWorld, p: WorldPlace) => ({
   entryId: w.atlasId, pageId: w.pages?.[p.id], ...center(p.x, p.y),
+  // Hex-crawl: a found place's pin shows even when the party isn't looking at it.
+  global: !!w.explored && isFound(w, p),
   texture: { src: ICON[p.kind] }, iconSize: p.kind === "city" ? 48 : 36, text: p.name, fontSize: p.kind === "city" ? 28 : 22,
   textAnchor: CONST.TEXT_ANCHOR_POINTS.BOTTOM, flags: { [MODULE_ID]: { place: p.id } },
 });
@@ -89,6 +98,35 @@ const routeData = (w: StoredWorld) => {
   };
 };
 
+/** Hex-crawl: the party is a token (the party stash actor) carrying a light as far as they can see. */
+async function partyTokenData(w: StoredWorld) {
+  const actor = await ensureStash();
+  const c = center(w.party.x, w.party.y);
+  const reach = sightRadius(w, w.party.x, w.party.y) * w.milesPerCell;
+  const doc = await actor.getTokenDocument({
+    x: c.x - WORLD_CELL_PX / 2, y: c.y - WORLD_CELL_PX / 2, width: 1, height: 1, name: "The Party", actorLink: true,
+    disposition: CONST.TOKEN_DISPOSITIONS.FRIENDLY, sight: { enabled: true, range: 0 },
+    light: { bright: reach, dim: reach + w.milesPerCell, color: "#fff3d6", alpha: 0.15 },
+    flags: { [MODULE_ID]: { partyMarker: true } },
+  });
+  return doc.toObject();
+}
+
+/** Show players the atlas pages (and pins) of places they've found. */
+async function revealFound(w: StoredWorld) {
+  if (!w.explored) return;
+  const atlas = w.atlasId && game.journal.get(w.atlasId);
+  if (atlas) {
+    const updates = w.places.filter((p) => isFound(w, p)).map((p) => atlas.pages.get(w.pages?.[p.id] ?? "")).filter((pg: any) => pg && (pg.ownership?.default ?? 0) < 2).map((pg: any) => ({ _id: pg.id, "ownership.default": 2 }));
+    if (updates.length) await atlas.updateEmbeddedDocuments("JournalEntryPage", updates);
+  }
+  const scene = w.sceneId && game.scenes.get(w.sceneId);
+  if (scene) {
+    const notes = scene.notes.filter((n: any) => !n.global && w.places.some((p) => p.id === n.getFlag(MODULE_ID, "place") && isFound(w, p))).map((n: any) => ({ _id: n.id, global: true }));
+    if (notes.length) await scene.updateEmbeddedDocuments("Note", notes);
+  }
+}
+
 /** Paint the map and make its scene (or a fresh one, replacing the old map). */
 export async function createWorldScene(w: StoredWorld) {
   const src = await uploadImage(await worldToBlob(w), `world-${w.seed.replace(/[^\w-]/g, "_")}-${Date.now()}.webp`);
@@ -97,12 +135,15 @@ export async function createWorldScene(w: StoredWorld) {
     name: "World map", folder: await ensureFolder("Scene"), width: w.w * WORLD_CELL_PX, height: w.h * WORLD_CELL_PX, padding: 0,
     backgroundColor: "#2c3e46", background: { src },
     grid: { type: CONST.GRID_TYPES.SQUARE, size: WORLD_CELL_PX, distance: w.milesPerCell, units: "mi", alpha: 0 },
-    tokenVision: false, fog: { exploration: false }, journal: w.atlasId,
-    notes: w.places.map((p) => noteData(w, p)), drawings: [partyData(w)],
+    // Hex-crawl: dark and fogged, lit only around the party; what they've seen stays mapped.
+    tokenVision: !!w.explored, fog: { exploration: !!w.explored }, environment: { darknessLevel: w.explored ? 1 : 0 }, journal: w.atlasId,
+    notes: w.places.map((p) => noteData(w, p)), drawings: w.explored ? [] : [partyData(w)],
+    tokens: w.explored ? [await partyTokenData(w)] : [],
     flags: { [MODULE_ID]: { kind: "world", seed: w.seed } },
   });
   w.sceneId = scene.id;
   await saveWorld(w);
+  await revealFound(w);
   return scene;
 }
 
@@ -110,10 +151,17 @@ export async function createWorldScene(w: StoredWorld) {
 async function syncScene(w: StoredWorld) {
   const scene = w.sceneId && game.scenes.get(w.sceneId);
   if (!scene) return;
-  const marker = scene.drawings.find((d: any) => d.getFlag(MODULE_ID, "partyMarker"));
-  const data = partyData(w);
-  if (marker) await marker.update({ x: data.x, y: data.y }, { animate: true });
-  else await scene.createEmbeddedDocuments("Drawing", [data]);
+  if (w.explored) {
+    const token = scene.tokens.find((t: any) => t.getFlag(MODULE_ID, "partyMarker"));
+    const data = await partyTokenData(w);
+    if (token) await token.update({ x: data.x, y: data.y, light: data.light }, { animate: true });
+    else await scene.createEmbeddedDocuments("Token", [data]);
+  } else {
+    const marker = scene.drawings.find((d: any) => d.getFlag(MODULE_ID, "partyMarker"));
+    const data = partyData(w);
+    if (marker) await marker.update({ x: data.x, y: data.y }, { animate: true });
+    else await scene.createEmbeddedDocuments("Drawing", [data]);
+  }
   const old = scene.drawings.filter((d: any) => d.getFlag(MODULE_ID, "routeLine")).map((d: any) => d.id);
   if (old.length) await scene.deleteEmbeddedDocuments("Drawing", old);
   const route = routeData(w);
@@ -122,6 +170,13 @@ async function syncScene(w: StoredWorld) {
   const pinned = new Set(scene.notes.map((n: any) => n.getFlag(MODULE_ID, "place")));
   const fresh = w.places.filter((p) => !pinned.has(p.id));
   if (fresh.length) await scene.createEmbeddedDocuments("Note", fresh.map((p) => noteData(w, p)));
+  await revealFound(w);
+}
+
+/** Tell the table about places they've just come across. */
+async function announceFound(before: StoredWorld, after: StoredWorld) {
+  const found = newlyFound(before, after);
+  if (found.length) await ChatMessage.create({ speaker: { alias: "DnD Toolkit" }, content: `<p><i class="fa-solid fa-binoculars"></i> On the horizon: ${found.map((p) => `<strong>${esc(p.name)}</strong> <small>(${p.kind})</small>`).join(", ")}.</p>` });
 }
 
 // --- The Travel tab's world card ----------------------------------------------------------------
@@ -131,6 +186,8 @@ export interface TravelPatch {
   to?: string;
   days?: number;
   terrain?: Terrain;
+  /** Exploring turned up a fight: open it in the Encounter tab. */
+  encounter?: { tags: string; seed: string };
 }
 
 const placeOptions = (w: StoredWorld, value: string, here = false) =>
@@ -148,6 +205,7 @@ export function worldCardHtml(pace: Pace, nextMiles?: number): string {
       <div class="dt-row">
         <label>Climate <select data-world="climate"><option>temperate</option><option>cold</option><option>hot</option></select></label>
         <label>Seed <input type="text" data-world="seed" placeholder="random"></label>
+        <label title="Start with only the party's surroundings known: the map reveals itself as they travel, and places are found on the way"><input type="checkbox" data-world="fog"> Hex-crawl (fogged)</label>
         ${wbtn("generate", `<i class="fa-solid fa-wand-magic-sparkles"></i> Generate world map`)}
       </div></div>`;
   }
@@ -169,6 +227,7 @@ export function worldCardHtml(pace: Pace, nextMiles?: number): string {
       <label>To <select data-world="to">${placeOptions(w, trip?.to ?? "")}</select></label>
       ${wbtn("route", `<i class="fa-solid fa-route"></i> Plan the trip`, "Find the way (by road where it can), fill in the journey below and draw the route on the map")}
     </div>
+    ${trip ? "" : `<div class="dt-row dt-actions">${wbtn("explore", `<i class="fa-solid fa-binoculars"></i> Explore here (a day)`, "Spend a day searching the area around the party: something may turn up (a ruin, a lair, food), or something may find them")}</div>`}
     <div class="dt-row dt-actions">
       ${wbtn("sync", `<i class="fa-solid fa-rotate"></i> Add campaign places`, "Put places added to the campaign since on the map")}
       ${wbtn("repaint", `<i class="fa-solid fa-paintbrush"></i> New scene`, "Repaint the map into a new scene (pins and marker included)")}
@@ -184,7 +243,8 @@ export async function worldAction(op: string, d: DOMStringMap, root: HTMLElement
     case "generate": {
       ui.notifications.info("Painting the world map…");
       const c = getCampaign();
-      const world: StoredWorld = generateWorld({ seed: v("seed") || randomSeed(), climate: (v("climate") || "temperate") as Climate, places: c.places });
+      const fog = !!(root.querySelector('[data-world="fog"]') as HTMLInputElement | null)?.checked;
+      const world: StoredWorld = generateWorld({ seed: v("seed") || randomSeed(), climate: (v("climate") || "temperate") as Climate, places: c.places, fog });
       const scene = await createWorldScene(world);
       scene.view();
       return;
@@ -227,14 +287,31 @@ export async function worldAction(op: string, d: DOMStringMap, root: HTMLElement
       ui.notifications.info(`${route.miles} miles to ${to.name} (${mix}): about ${route.days[pace]} day${route.days[pace] === 1 ? "" : "s"}.`);
       return { from: from.name, to: to.name, days: Math.min(21, route.days[pace]), terrain: route.main };
     }
+    case "explore": {
+      if (!w) return;
+      const r = exploreHex(w, randomSeed());
+      const before = w;
+      if (r.place) {
+        w = { ...w, ...addDiscovery(w, r.place) };
+        await ensureAtlas(w);
+      }
+      await saveWorld(w);
+      await syncScene(w);
+      await ChatMessage.create({ speaker: { alias: "DnD Toolkit" }, content: `<p><i class="fa-solid fa-binoculars"></i> A day exploring: ${esc(r.text)}${r.place ? ` It goes on the map as <strong>${esc(r.place.name)}</strong>.` : ""}</p>` });
+      if (r.place) await announceFound(before, w);
+      if (r.kind === "encounter" && r.tags) return { encounter: { tags: r.tags, seed: randomSeed() } };
+      return;
+    }
     case "walk":
     case "arrive":
     case "cancel": {
       if (!w?.trip) return;
+      const before = w;
       w = op === "cancel" ? { ...w, trip: undefined, party: { x: Math.round(w.party.x), y: Math.round(w.party.y) } } : { ...w, ...advanceTrip(w, op === "arrive" ? Infinity : Number(d.miles) || 24) };
       if (op === "cancel" || !w.trip) delete (w as Partial<StoredWorld>).trip;
       await saveWorld(w);
       await syncScene(w);
+      await announceFound(before, w);
       if (op !== "cancel" && !w.trip && w.party.at) ui.notifications.info(`The party reaches ${worldPlace(w, w.party.at)?.name}.`);
       return;
     }

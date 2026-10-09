@@ -153,6 +153,10 @@ import { linkEncounter, placeEncounter } from "./importers/tokens.ts";
 import { esc, MODULE_ID } from "./util.ts";
 import { getWorld, worldAction, worldCardHtml } from "./world-map.ts";
 import { placeLoot } from "./loot-piles.ts";
+import { openShopForPlayers } from "./shop-trade.ts";
+import { beginTalk } from "./talk.ts";
+import { beginChase, beginSkillChallenge } from "./challenge.ts";
+import { queueAmbience, travelAmbience } from "./ambience.ts";
 
 const { ApplicationV2 } = foundry.applications.api;
 
@@ -339,6 +343,7 @@ export class ToolkitApp extends ApplicationV2 {
       toScene: ToolkitApp.#onToScene,
       lootChat: ToolkitApp.#onLootChat,
       shopMerchant: ToolkitApp.#onShopMerchant,
+      shopOpen: ToolkitApp.#onShopOpen,
       shopJournal: ToolkitApp.#onShopJournal,
       shopBattlemap: ToolkitApp.#onShopBattlemap,
       shopKeeper: ToolkitApp.#onShopKeeper,
@@ -369,6 +374,9 @@ export class ToolkitApp extends ApplicationV2 {
       forgeCraft: ToolkitApp.#onForgeCraft,
       campaign: ToolkitApp.#onCampaign,
       campTrack: ToolkitApp.#onCampTrack,
+      npcTalk: ToolkitApp.#onNpcTalk,
+      chalStart: ToolkitApp.#onChalStart,
+      chaseStart: ToolkitApp.#onChaseStart,
       townShop: ToolkitApp.#onTownShop,
       townTrouble: ToolkitApp.#onTownTrouble,
       townScene: ToolkitApp.#onTownScene,
@@ -854,7 +862,8 @@ export class ToolkitApp extends ApplicationV2 {
           <p><strong>Rumor:</strong> ${esc(s.rumor)}</p>
         </div>
         <div class="dt-row dt-actions">
-          <button type="button" data-action="shopMerchant" ${piles ? "" : "disabled"} title="${piles ? "Create an Item Piles merchant players can buy from" : "Requires the Item Piles module"}"><i class="fa-solid fa-shop"></i> Item Piles merchant</button>
+          <button type="button" data-action="shopOpen" title="Open the shop on every player's screen: they buy and sell from their own purse or the party stash, and can haggle once"><i class="fa-solid fa-store"></i> Open for players</button>
+          ${piles ? `<button type="button" data-action="shopMerchant" title="Create an Item Piles merchant instead"><i class="fa-solid fa-shop"></i> Item Piles merchant</button>` : ""}
           <button type="button" data-action="shopKeeper" title="Flesh out the shopkeeper as an NPC with a voice, secret and actor"><i class="fa-solid fa-user"></i> Keeper NPC</button>
           <button type="button" data-action="shopBattlemap" title="Make a battlemap of this shop's floor"><i class="fa-solid fa-map-location-dot"></i> Battlemap</button>
           <button type="button" data-action="shopJournal"><i class="fa-solid fa-book"></i> Journal</button>
@@ -1364,7 +1373,22 @@ export class ToolkitApp extends ApplicationV2 {
         <p class="dt-sub">${esc(summarize(state))}</p>
       </div>`;
     }).join("");
+    const lvl = detectParty()?.level ?? 3;
     return `
+      <details class="dt-card dt-chal-start"><summary><i class="fa-solid fa-list-check"></i> <strong>Skill challenge or chase</strong> <small>(a shared tracker everyone rolls into)</small></summary>
+        <div class="dt-row">
+          <label class="dt-field"><span>Skill challenge</span><select data-chal="complexity"><option value="short">Short (4 successes)</option><option value="normal" selected>Normal (6)</option><option value="long">Long (8)</option></select></label>
+          <button type="button" data-action="chalStart"><i class="fa-solid fa-play"></i> Start a skill challenge</button>
+        </div>
+        <div class="dt-row">
+          <label class="dt-field"><span>Chase</span><select data-chal="mode"><option value="pursue">They chase…</option><option value="flee">They flee from…</option></select></label>
+          <label class="dt-field"><span>Who</span><input type="text" data-chal="other" placeholder="the cutpurse"></label>
+          <label class="dt-field"><span>Where</span><select data-chal="env"><option value="urban">Streets</option><option value="wilderness">Wilds</option><option value="dungeon">Dungeon</option></select></label>
+          <label class="dt-field"><span>Lead</span><input type="number" data-chal="lead" min="1" max="5" value="3" style="width:4em"></label>
+          <button type="button" data-action="chaseStart"><i class="fa-solid fa-person-running"></i> Start the chase</button>
+        </div>
+        <p class="dt-sub">Party level ${lvl}. Players see the tracker and roll from their sheets; you see the DCs and end each chase round.</p>
+      </details>
       <div class="dt-chips"><span>Presets</span>${ROLL_PRESETS.map(([label], i) => `<button type="button" class="dt-chip" data-action="rollPreset" data-index="${i}">${esc(label)}</button>`).join("")}</div>
       ${this.#field("rolls", "prompt", "What the players see", `<input type="text" value="${esc(f.prompt)}" placeholder="Something rustles in the undergrowth…">`)}
       <div class="dt-row">
@@ -1409,6 +1433,7 @@ export class ToolkitApp extends ApplicationV2 {
           <button type="button" data-action="npcChat"><i class="fa-solid fa-comment"></i> Chat (GM)</button>
           <button type="button" data-action="npcJournal"><i class="fa-solid fa-book"></i> Journal</button>
           <button type="button" data-action="campTrack" data-what="npc" title="Remember them in the campaign: the party's met them"><i class="fa-solid fa-landmark-flag"></i> Remember</button>
+          <button type="button" data-action="npcTalk" title="Start a conversation everyone sees: the players try to talk them round with Persuasion, Deception, Intimidation and Insight"><i class="fa-solid fa-comments"></i> Talk</button>
         </div>`
       : `<p class="dt-empty">Pick a role (or leave it random) and generate someone to talk to.</p>`}`;
   }
@@ -1767,6 +1792,10 @@ export class ToolkitApp extends ApplicationV2 {
     ui.notifications.info(hidden ? "Placed, hidden (DC 15 to find)." : "Placed. Players walk up to it to loot it.");
   }
 
+  static async #onShopOpen(this: ToolkitApp) {
+    if (this.shop) await openShopForPlayers(this.shop);
+  }
+
   static #onShopMerchant(this: ToolkitApp, _e: Event, target: HTMLButtonElement) {
     const s = this.shop;
     if (s) this.#run(target, () => createMerchant(s));
@@ -1924,6 +1953,8 @@ export class ToolkitApp extends ApplicationV2 {
     this.locked.clear();
     await this.#generate("encounter");
     Object.assign(this.form.battlemap, { seed: e.seed, setting: e.map, name: `Day ${d.day}: ${d.event.time ?? "on the road"}`, place: true, night: /dusk|watch|night/.test(d.event.time ?? "") });
+    // The scene made from it gets the day's weather and time.
+    queueAmbience(travelAmbience(d.weather.text, this.form.travel.season, d.event.time));
     this.tab = "battlemap";
     this.#generate("battlemap");
   }
@@ -1953,7 +1984,12 @@ export class ToolkitApp extends ApplicationV2 {
   static async #onWorld(this: ToolkitApp, _e: Event, target: HTMLElement) {
     this.#readForm();
     const patch = await worldAction(target.dataset.op!, target.dataset, this.element, this.form.travel.pace);
-    if (patch) {
+    if (patch?.encounter) {
+      // Exploring ran into something: the fight, ready to build.
+      Object.assign(this.form.encounter, { seed: patch.encounter.seed, tags: patch.encounter.tags, difficulty: "moderate", template: "auto" });
+      this.tab = "encounter";
+      await this.#generate("encounter");
+    } else if (patch) {
       Object.assign(this.form.travel, patch, { seed: "" });
       await this.#generate("travel");
     }
@@ -2001,6 +2037,26 @@ export class ToolkitApp extends ApplicationV2 {
   }
 
   /** Add whatever this tab made to the campaign. */
+  #chal(k: string) {
+    return ((this.element.querySelector(`[data-chal="${k}"]`) as HTMLInputElement | null)?.value ?? "").trim();
+  }
+
+  static async #onChalStart(this: ToolkitApp) {
+    await beginSkillChallenge(detectParty()?.level ?? 3, (this.#chal("complexity") || "normal") as "short" | "normal" | "long");
+  }
+
+  static async #onChaseStart(this: ToolkitApp) {
+    await beginChase({ mode: this.#chal("mode") as "pursue" | "flee", other: this.#chal("other") || (this.#chal("mode") === "flee" ? "the pursuers" : "the quarry"), env: this.#chal("env") as "urban" | "wilderness" | "dungeon", level: detectParty()?.level ?? 3, lead: Number(this.#chal("lead")) || 3 });
+  }
+
+  static async #onNpcTalk(this: ToolkitApp) {
+    const n = this.npc;
+    if (!n) return;
+    // Someone the campaign remembers starts from how they feel about the party.
+    const known = getCampaign().npcs.find((x) => x.name === n.name);
+    await beginTalk(n, { npcId: known?.id, attitude: known?.attitude });
+  }
+
   static async #onCampTrack(this: ToolkitApp, _e: Event, target: HTMLElement) {
     const day = currentDay();
     const what = target.dataset.what;

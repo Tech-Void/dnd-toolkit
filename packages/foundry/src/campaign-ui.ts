@@ -16,6 +16,8 @@ import { getCampaign, saveCampaign, updateCampaign } from "./campaign-store.ts";
 import { currentDay } from "./downtime.ts";
 import { createNpcActor } from "./importers/npc.ts";
 import { prepAction, prepHtml } from "./session-prep.ts";
+import { logSession, questReward } from "./rewards.ts";
+import { beginTalk } from "./talk.ts";
 import { esc } from "./util.ts";
 
 // ---------------------------------------------------------------------------
@@ -81,6 +83,7 @@ function peopleHtml(c: CampaignState, filter: string): string {
         ${op("attitude", `<i class="fa-solid fa-thumbs-down"></i>`, { id: n.id, delta: "-1" }, "They like the party less")}
         ${op("attitude", `<i class="fa-solid fa-thumbs-up"></i>`, { id: n.id, delta: "1" }, "They like the party more")}
         ${op("brief", `<i class="fa-solid fa-comment"></i> Brief me`, { id: n.id }, "Whisper yourself what the party knows about them")}
+        ${op("talk", `<i class="fa-solid fa-comments"></i> Talk`, { id: n.id }, "Start a conversation everyone sees, starting from how they feel about the party")}
         ${n.npc ? op("npcActor", `<i class="fa-solid fa-user-plus"></i> Actor`, { id: n.id }, "Create (or open) their actor") : ""}
         ${op("alive", n.alive ? `<i class="fa-solid fa-skull"></i>` : `<i class="fa-solid fa-heart"></i>`, { id: n.id }, n.alive ? "Mark dead" : "Mark alive")}
       </div>
@@ -143,6 +146,11 @@ export async function campaignAction(target: HTMLElement, root: HTMLElement): Pr
       ChatMessage.create({ speaker: { alias: "Campaign" }, whisper: game.users.filter((u: any) => u.isGM).map((u: any) => u.id), content: `<p>${esc(text)}</p>` });
       return;
     }
+    case "talk": {
+      const n = getCampaign().npcs.find((x) => x.id === d.id);
+      if (n) await beginTalk(n, { npcId: n.id, attitude: n.attitude });
+      return;
+    }
     case "alive":
       return void (await updateCampaign((c) => {
         const n = c.npcs.find((x) => x.id === d.id);
@@ -191,7 +199,12 @@ export async function campaignAction(target: HTMLElement, root: HTMLElement): Pr
 export function bindCampaignInputs(root: HTMLElement, rerender: () => void, onFilter: (v: string) => void) {
   const day = currentDay();
   for (const sel of root.querySelectorAll("select[data-quest-status]") as NodeListOf<HTMLSelectElement>) {
-    sel.addEventListener("change", () => updateCampaign((c) => setQuestStatus(c, sel.dataset.questStatus!, sel.value as QuestStatus, day)));
+    sel.addEventListener("change", async () => {
+      await updateCampaign((c) => setQuestStatus(c, sel.dataset.questStatus!, sel.value as QuestStatus, day));
+      const q = getCampaign().quests.find((x) => x.id === sel.dataset.questStatus);
+      if (q && sel.value === "done") await questReward(q);
+      else if (q) await logSession({ kind: "quest", text: `${q.title}: ${sel.value}` });
+    });
   }
   for (const box of root.querySelectorAll("input[data-quest-step]") as NodeListOf<HTMLInputElement>) {
     box.addEventListener("change", () => updateCampaign((c) => {

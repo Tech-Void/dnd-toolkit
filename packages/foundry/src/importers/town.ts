@@ -2,6 +2,7 @@ import type { Npc, Town } from "@dnd-toolkit/core";
 import { ensureFolder, esc, MODULE_ID } from "../util.ts";
 import { createBattlemapScene } from "./battlemap.ts";
 import { shopHtml } from "./shop.ts";
+import { townRegionData } from "../town-places.ts";
 
 const who = (n: Npc) => `${esc(n.name)} <em>(${esc(`${n.age} ${n.race} ${n.occupation}`)})</em>: ${esc(n.personality)}; ${esc(n.voice)}.`;
 
@@ -54,5 +55,10 @@ export async function createTownScene(t: Town) {
     const b = t.map.buildings!.find((x) => x.id === p.buildingId)!;
     return { x: b.x + b.w / 2, y: b.y + b.h / 2, text: p.label, entryId: journal.id, pageId: pageFor.get(p.buildingId), icon: ICONS[p.kind] };
   });
-  return createBattlemapScene(t.map, { name: t.name, notes, journalId: journal.id });
+  const scene = await createBattlemapScene(t.map, { name: t.name, notes, journalId: journal.id });
+  // Walking into a named building opens it (shop, inn, temple, hall).
+  const { map: _map, ...town } = t;
+  await scene.setFlag(MODULE_ID, "town", town);
+  await scene.createEmbeddedDocuments("Region", townRegionData(t, scene.grid.size));
+  return scene;
 }

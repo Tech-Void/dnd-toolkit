@@ -1,4 +1,4 @@
-import { ABILITY_NAMES, trapText, type DoorLock, type Trap } from "@dnd-toolkit/core";
+import { ABILITY_NAMES, trapText, type DoorLock, type Trap, type WallSegment } from "@dnd-toolkit/core";
 import { partyActors, sendRollRequest } from "./rolls.ts";
 import { esc, MODULE_ID } from "./util.ts";
 
@@ -266,6 +266,55 @@ export async function resolveNotice(msg: { regionUuid: string; tokenName: string
   });
 }
 
+// --- Secret doors -------------------------------------------------------------------------
+
+const SECRET = `await game.modules.get("${MODULE_ID}")?.api?.noticeSecret?.(region, event);`;
+
+/** A zone around a secret door: a sharp-eyed character walking by (passive Perception vs its DC) finds it. */
+export function secretDoorRegionData(w: WallSegment, dc: number, gs: number, key: string) {
+  const mx = (w.x1 + w.x2) / 2;
+  const my = (w.y1 + w.y2) / 2;
+  return {
+    name: `Secret door (DC ${dc})`,
+    color: "#8e44ad",
+    shapes: [{ type: "rectangle", x: (mx - 1.5) * gs, y: (my - 1.5) * gs, width: 3 * gs, height: 3 * gs, rotation: 0, hole: false }],
+    visibility: CONST.REGION_VISIBILITY.GAMEMASTER,
+    behaviors: [{ type: "executeScript", name: "Notice it", system: { events: ["tokenMoveIn"], source: SECRET } }],
+    flags: { [MODULE_ID]: { secretDoor: { dc, key } } },
+  };
+}
+
+/** Region script (the mover's own client): passive Perception beats the DC, and they notice the door. */
+export async function noticeSecret(region: any, event: any) {
+  if (event.name !== "tokenMoveIn" || event.user?.isGM || !event.user?.isSelf) return;
+  const s = region.getFlag(MODULE_ID, "secretDoor");
+  const token = event.data?.token;
+  const passive = Number(token?.actor?.system?.skills?.prc?.passive ?? 0);
+  if (!s || !token || token.hidden || passive < s.dc) return;
+  game.socket.emit(SOCKET, { kind: "secretFound", regionUuid: region.uuid, tokenName: token.name, total: passive, how: "passive Perception" });
+}
+
+const SECRET_FEEL = ["a draft whispering through a crack in the wall", "scuff marks on the floor that end at the wall", "one block of stone that sits a little proud of the rest", "a faint seam where no seam should be", "dust that doesn't settle along one line of the wall"];
+
+/** GM side: turn the secret door into a door they can see (a puzzle's door stays sealed). */
+export async function resolveSecret(msg: { regionUuid: string; tokenName: string; total: number; how: string }) {
+  const region = await fromUuid(msg.regionUuid);
+  const s = region?.getFlag(MODULE_ID, "secretDoor");
+  if (!region || !s || msg.total < s.dc) return false;
+  const scene = region.parent;
+  const wall = scene.walls.find((w: any) => w.getFlag(MODULE_ID, "secretKey") === s.key);
+  await region.delete();
+  if (!wall || wall.door !== CONST.WALL_DOOR_TYPES.SECRET) return false;
+  const puzzle = wall.getFlag(MODULE_ID, "puzzleDoor");
+  await wall.update(puzzle
+    ? { door: CONST.WALL_DOOR_TYPES.DOOR, ds: CONST.WALL_DOOR_STATES.LOCKED, [`flags.${MODULE_ID}.lock`]: { kind: "sealed", forceDc: 25, rooms: [] } }
+    : { door: CONST.WALL_DOOR_TYPES.DOOR, ds: CONST.WALL_DOOR_STATES.CLOSED });
+  const feel = SECRET_FEEL[Math.floor(Math.random() * SECRET_FEEL.length)];
+  ChatMessage.create({ speaker: { alias: "DnD Toolkit" }, content: `<p><i class="fa-solid fa-door-open"></i> <strong>${esc(msg.tokenName)}</strong> notices ${feel}. A hidden door!${puzzle ? " It won't open by any means they can see." : ""}</p>` });
+  ChatMessage.create({ speaker: { alias: "DnD Toolkit" }, whisper: gmIds(), content: `<p>${esc(msg.tokenName)} found the secret door (${esc(msg.how)} ${msg.total} vs DC ${s.dc}).</p>` });
+  return true;
+}
+
 // --- Wiring ---------------------------------------------------------------------------------
 
 export function initInteractive() {
@@ -276,6 +325,7 @@ export function initInteractive() {
     if (!game.users.activeGM?.isSelf) return;
     if (msg?.kind === "doorAttempt") resolveDoor(msg);
     else if (msg?.kind === "trapNoticed") resolveNotice(msg);
+    else if (msg?.kind === "secretFound") resolveSecret(msg);
   });
   Hooks.on("renderChatMessage", (message: any, html: any) => {
     const card = message.getFlag?.(MODULE_ID, "trapCard");

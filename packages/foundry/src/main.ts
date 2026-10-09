@@ -14,13 +14,19 @@ import { giveLootToActor, resetItemIndex, resolveItemData } from "./importers/it
 import { MODULE_ID } from "./util.ts";
 import { initRollRequests, sendRollRequest } from "./rolls.ts";
 import { initCombatHelpers, registerCombatSettings } from "./combat.ts";
-import { initInteractive, noticeTrap, setTrapArmed, springTrap } from "./interactive.ts";
+import { initInteractive, noticeSecret, noticeTrap, setTrapArmed, springTrap } from "./interactive.ts";
 import { initPuzzles, puzzleStep } from "./puzzles.ts";
 import { initQuickCombat, quickAct, registerQuickCombatSettings } from "./quick-combat.ts";
 import { ActionBar } from "./action-bar.ts";
 import { initPartyHud, registerPartyHudSettings } from "./party-hud.ts";
 import { registerPrepSettings } from "./session-prep.ts";
 import { registerWorldSettings } from "./world-map.ts";
+import { awardXp, endSession, initRewards, registerRewardSettings } from "./rewards.ts";
+import { initShops, openShopForPlayers, registerShopSettings } from "./shop-trade.ts";
+import { initTowns, townEnter } from "./town-places.ts";
+import { beginTalk, initTalk, registerTalkSettings } from "./talk.ts";
+import { beginChase, beginSkillChallenge, initChallenges, registerChallengeSettings } from "./challenge.ts";
+import { ambienceDialog, applyAmbience, initAmbience, registerAmbienceSettings, scanAudio } from "./ambience.ts";
 import { createPile, ensureStash, initPiles, openStash, pileEnter, placeLoot, registerPileSettings, searchHere } from "./loot-piles.ts";
 import { CampApp } from "./camp-app.ts";
 import { registerFaSettings } from "./fa-assets.ts";
@@ -91,6 +97,8 @@ const api = {
   /** Called by trap Regions' scripts: a token stepped on a trap / walked up to one. */
   springTrap,
   noticeTrap,
+  /** Called by secret door Regions' scripts: a token walked past one. */
+  noticeSecret,
   /** Called by puzzle Regions' scripts: a token stepped on a lever, plate, statue or rune. */
   puzzleStep,
   /** await tk.quickAct(actor, item, "advantage") — pick a target and resolve an attack, save or heal. */
@@ -112,6 +120,22 @@ const api = {
   searchHere,
   ensureStash,
   openStash,
+  /** await tk.awardXp(game.actors.filter(a => a.hasPlayerOwner && a.type === "character"), 150, "the bridge") */
+  awardXp,
+  endSession,
+  /** await tk.openShopForPlayers(tk.generateShop({ type: "alchemist", settlement: "town" })) */
+  openShopForPlayers,
+  /** Called by town door Regions' scripts: a token walked into a named building. */
+  townEnter,
+  /** await tk.beginTalk({ name: "Ilsa", personality: "guarded", motive: "pay a debt", secret: "she sold the key" }) */
+  beginTalk,
+  /** await tk.beginSkillChallenge(5, "normal"); await tk.beginChase({ mode: "pursue", other: "the thief", env: "urban", level: 5, lead: 3 }) */
+  beginSkillChallenge,
+  beginChase,
+  /** await tk.applyAmbience(canvas.scene, { mood: "tavern", time: "night", weather: "rain" }) */
+  applyAmbience,
+  ambienceDialog,
+  scanAudio,
 };
 
 Hooks.once("init", () => {
@@ -136,6 +160,11 @@ Hooks.once("init", () => {
   registerPrepSettings();
   registerWorldSettings();
   registerPileSettings();
+  registerRewardSettings();
+  registerShopSettings();
+  registerTalkSettings();
+  registerChallengeSettings();
+  registerAmbienceSettings();
   // Monsters used lately, so generators don't keep reaching for the same ones.
   game.settings.register(MODULE_ID, "recentMonsters", { scope: "client", config: false, type: Array, default: [] });
   game.modules.get(MODULE_ID).api = api;
@@ -157,6 +186,12 @@ Hooks.once("ready", () => {
   initQuickCombat();
   initPartyHud();
   initPiles();
+  initRewards();
+  initShops();
+  initTowns();
+  initTalk();
+  initChallenges();
+  initAmbience();
   initDowntimeSocket();
   // Someone joining mid-camp gets the camp window too.
   CampApp.refresh();
@@ -183,6 +218,9 @@ Hooks.on("getSceneControlButtons", (controls: any) => {
   if (Array.isArray(controls)) controls.find((c: any) => c.name === "token")?.tools.push(...shared.map((t) => ({ ...t, onClick: t.onChange })));
   else if (controls.tokens?.tools) for (const t of shared) controls.tokens.tools[t.name] = t;
   if (!game.user.isGM) return;
+  const ambience = { name: `${MODULE_ID}-ambience`, title: "Ambience (music, time of day, weather)", icon: "fa-solid fa-music", button: true, visible: true, order: 106, onChange: () => ambienceDialog() };
+  if (Array.isArray(controls)) controls.find((c: any) => c.name === "token")?.tools.push({ ...ambience, onClick: ambience.onChange });
+  else if (controls.tokens?.tools) controls.tokens.tools[ambience.name] = ambience;
   const tool = {
     name: MODULE_ID,
     title: "DnD Toolkit",

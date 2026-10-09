@@ -259,6 +259,8 @@ export interface RoomKey {
   loot?: LootResult;
   /** Behind a secret door. */
   hidden?: boolean;
+  /** DC to find the secret door into it (Perception or Investigation). */
+  secretDc?: number;
   /** The trap's full details (key.trap is its summary). */
   trapData?: Trap;
   /** Treasure lying somewhere in the room, for the players to find. */
@@ -509,7 +511,8 @@ export function stockDungeon(map: DungeonMap, opts: StockOptions): RoomKey[] {
     if (room.hidden) {
       key.title = `${noun} ${room.id} — Hidden`;
       key.hidden = true;
-      key.description = `Behind a secret door (DC ${rng.int(13, 16)} Wisdom (Perception) or Intelligence (Investigation) to find). ${key.description}`;
+      key.secretDc = rng.int(13, 16);
+      key.description = `Behind a secret door (DC ${key.secretDc} Wisdom (Perception) or Intelligence (Investigation) to find). ${key.description}`;
       key.loot = generateLoot({ cr: opts.partyLevel, mode: "hoard", magicItems: opts.magicItems, forge: opts.uniqueItems, curse: opts.curse, seed: `${seed}:hidden` });
       if (opts.lootPiles) key.piles = [pile(room, key.loot)];
       if (rng.chance(0.3)) key.encounter = generateEncounter({ ...base, difficulty: shift("moderate"), maxCreatures: capFor(room), seed });
@@ -543,4 +546,14 @@ export function renderAscii(map: DungeonMap): string {
     for (let i = 0; i < label.length && map.cells[cy]?.[cx + i] === FLOOR; i++) rows[cy]![cx + i] = label[i]!;
   }
   return rows.map((r) => r.join("")).join("\n");
+}
+
+/** The DC to find a secret door: the nearest hidden room's, else 15. */
+export function secretDoorDc(map: DungeonMap, keys: readonly RoomKey[], w: WallSegment): number {
+  const mx = (w.x1 + w.x2) / 2;
+  const my = (w.y1 + w.y2) / 2;
+  // Distance from the door to each hidden room's box; the closest is the one it opens.
+  const gap = (r: Room) => Math.hypot(Math.max(r.x - mx, 0, mx - (r.x + r.w)), Math.max(r.y - my, 0, my - (r.y + r.h)));
+  const room = map.rooms.filter((r) => r.hidden).sort((a, b) => gap(a) - gap(b))[0];
+  return keys.find((k) => k.roomId === room?.id)?.secretDc ?? 15;
 }

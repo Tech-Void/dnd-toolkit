@@ -14,5 +14,7 @@ export default defineConfig({
       formats: ["es"],
       fileName: () => "scripts/main.js",
     },
+    // One file: the windows are imported lazily in the source (so tests don't need Foundry), not split.
+    rollupOptions: { output: { inlineDynamicImports: true } },
   },
 });

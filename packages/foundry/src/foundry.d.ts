@@ -17,4 +17,5 @@ declare const TokenDocument: any;
 declare function fromUuid(uuid: string): Promise<any>;
 declare function fromUuidSync(uuid: string): any;
 declare const Combat: any;
+declare const Playlist: any;
 declare const CONFIG: any;

@@ -17,9 +17,13 @@ import {
 import { faManifest, faUrl } from "./fa-assets.ts";
 import { giveLootToActor } from "./importers/items.ts";
 import { ensureWorldActor } from "./importers/tokens.ts";
-import { resolveNotice } from "./interactive.ts";
+import { resolveNotice, resolveSecret } from "./interactive.ts";
 import { partyActors, sendRollRequest } from "./rolls.ts";
 import { esc, MODULE_ID } from "./util.ts";
+import { logSession } from "./rewards.ts";
+
+const lootValue = (l: Pick<LootResult, "coins" | "items">) =>
+  l.coins.gp + l.coins.pp * 10 + l.coins.ep * 0.5 + l.coins.sp * 0.1 + l.coins.cp * 0.01 + l.items.reduce((n, i) => n + i.valueGp * i.quantity, 0);
 
 // ---------------------------------------------------------------------------
 // Treasure on the map. A pile is a Region (a one-square ring around it) carrying the pile's state,
@@ -195,15 +199,16 @@ export async function pileEnter(region: any, event: any) {
   openWindow(region.uuid, token.id);
 }
 
-/** The pile whose zone (the square ring around it) the token stands in. */
-const regionAround = (scene: any, token: any) => {
-  const gs = scene.grid.size;
+/** Is the token's centre inside the region's (rectangular) zone? */
+const inShape = (r: any, token: any) => {
+  const gs = token.parent.grid.size;
   const c = { x: token.x + (token.width * gs) / 2, y: token.y + (token.height * gs) / 2 };
-  return pileRegions(scene).find((r: any) => {
-    const s = r.shapes[0];
-    return s && c.x >= s.x && c.x <= s.x + s.width && c.y >= s.y && c.y <= s.y + s.height;
-  });
+  const s = r.shapes[0];
+  return !!s && c.x >= s.x && c.x <= s.x + s.width && c.y >= s.y && c.y <= s.y + s.height;
 };
+
+/** The pile whose zone (the square ring around it) the token stands in. */
+const regionAround = (scene: any, token: any) => pileRegions(scene).find((r: any) => inShape(r, token));
 
 /** Search / loot: open the pile you're standing by, or search the area (Perception or Investigation). */
 export async function searchHere(token: any = canvas.tokens?.controlled?.[0]) {
@@ -212,10 +217,16 @@ export async function searchHere(token: any = canvas.tokens?.controlled?.[0]) {
   const near = regionAround(doc.parent, doc);
   const pile = near && getPile(near);
   if (near && pile && !pile.hidden) return openWindow(near.uuid, doc.id);
+  // In a town doorway: go back inside.
+  const door = [...doc.parent.regions].find((r: any) => r.flags?.[MODULE_ID]?.townPlace !== undefined && inShape(r, doc));
+  if (door) {
+    const { openPlace } = await import("./town-places.ts");
+    return openPlace(doc.parent.id, door.flags[MODULE_ID].townPlace, doc.id);
+  }
   const DialogV2 = foundry.applications.api.DialogV2;
   const skill: string | null = await DialogV2.wait({
     window: { title: `${doc.name} searches`, icon: "fa-solid fa-magnifying-glass" },
-    content: `<p>Search the area around ${esc(doc.name)} (about 10 feet) for anything hidden: treasure, traps.</p>`,
+    content: `<p>Search the area around ${esc(doc.name)} (about 10 feet) for anything hidden: treasure, traps, secret doors.</p>`,
     buttons: [
       { action: "prc", label: "Look around (Perception)", default: true },
       { action: "inv", label: "Search carefully (Investigation)" },
@@ -288,6 +299,10 @@ async function resolveSearch(msg: { sceneId: string; tokenId: string; total: num
       found++;
       await resolveNotice({ regionUuid: r.uuid, tokenName: token.name, passive: msg.total, how: label });
     }
+  }
+  // Secret doors nearby.
+  for (const r of [...scene.regions].filter((x: any) => x.getFlag(MODULE_ID, "secretDoor") && near(x))) {
+    if (await resolveSecret({ regionUuid: r.uuid, tokenName: token.name, total: msg.total, how: label })) found++;
   }
   if (!found) await say(`<p><i class="fa-solid fa-magnifying-glass"></i> ${esc(token.name)} searches the area and finds nothing.</p>`);
 }
@@ -368,6 +383,7 @@ async function resolveOp(msg: any) {
     pile = after;
     await setPile(region, pile);
     await say(`<p><i class="fa-solid fa-sack-dollar"></i> <strong>${who}</strong> loots ${esc(pile.name.toLowerCase())}: ${esc(lootLine(taken))}. <em>Into the party stash.</em></p>`);
+    await logSession({ kind: "loot", text: `${msg.actorName} looted ${pile.name.toLowerCase()}: ${lootLine(taken)}`, gp: lootValue(taken) });
   } else if (msg.op === "harvest") {
     const i = (msg.picks as number[])[0]!;
     if (pile.loot.items[i]?.name !== msg.names?.[0]) return;
@@ -375,6 +391,7 @@ async function resolveOp(msg: any) {
     pile = r.pile;
     if (r.item) await giveLootToActor({ coins: { cp: 0, sp: 0, ep: 0, gp: 0, pp: 0 }, items: [r.item] }, await ensureStash(), { quiet: true, stack: true });
     await setPile(region, pile);
+    if (r.item) await logSession({ kind: "loot", text: `${msg.actorName} harvested ${r.item.name.toLowerCase()}`, gp: lootValue({ coins: { cp: 0, sp: 0, ep: 0, gp: 0, pp: 0 }, items: [r.item] }) });
     await say(`<p><i class="fa-solid fa-hand-scissors"></i> <strong>${who}</strong> ${r.ok ? `harvests ${esc(r.item!.quantity > 1 ? `${r.item!.quantity}× ` : "")}${esc(r.item!.name)} (${msg.total}). <em>Into the party stash.</em>` : `ruins the ${esc(msg.names[0].toLowerCase())} (${msg.total}).`}</p>`);
   }
   // Emptied: the pile goes (a body stays where it fell).
